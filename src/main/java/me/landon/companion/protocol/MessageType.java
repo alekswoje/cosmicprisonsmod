@@ -3,6 +3,7 @@ package me.landon.companion.protocol;
 public enum MessageType {
     CLIENT_HELLO_C2S(1),
     SERVER_HELLO_S2C(2),
+    ENTITY_MARKER_DELTA_S2C(4),
     INVENTORY_ITEM_OVERLAYS_S2C(10);
 
     private final int id;

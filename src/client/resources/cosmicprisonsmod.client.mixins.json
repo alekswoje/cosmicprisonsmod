@@ -5,7 +5,10 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "CustomPayloadCodecFallbackMixin",
-    "HandledScreenItemOverlayMixin"
+    "GameRendererPeacefulMiningMixin",
+    "HandledScreenItemOverlayMixin",
+    "LivingEntityRendererPeacefulMiningGhostMixin",
+    "MinecraftClientPeacefulMiningOutlineMixin"
   ],
   "injectors": {
     "defaultRequire": 1

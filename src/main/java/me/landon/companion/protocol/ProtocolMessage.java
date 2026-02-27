@@ -9,6 +9,7 @@ import java.util.Optional;
 public sealed interface ProtocolMessage
         permits ProtocolMessage.ClientHelloC2S,
                 ProtocolMessage.ServerHelloS2C,
+                ProtocolMessage.EntityMarkerDeltaS2C,
                 ProtocolMessage.InventoryItemOverlaysS2C {
 
     MessageType type();
@@ -44,6 +45,21 @@ public sealed interface ProtocolMessage
     record InventoryItemOverlay(int slot, int overlayType, String displayText) {
         public InventoryItemOverlay {
             displayText = Objects.requireNonNull(displayText, "displayText");
+        }
+    }
+
+    record EntityMarkerDeltaS2C(
+            int markerType, List<Integer> addEntityIds, List<Integer> removeEntityIds)
+            implements ProtocolMessage {
+        public EntityMarkerDeltaS2C {
+            addEntityIds = List.copyOf(Objects.requireNonNull(addEntityIds, "addEntityIds"));
+            removeEntityIds =
+                    List.copyOf(Objects.requireNonNull(removeEntityIds, "removeEntityIds"));
+        }
+
+        @Override
+        public MessageType type() {
+            return MessageType.ENTITY_MARKER_DELTA_S2C;
         }
     }
 
@@ -91,6 +107,10 @@ public sealed interface ProtocolMessage
     }
 
     static List<InventoryItemOverlay> mutableInventoryItemOverlayListWithCapacity(int size) {
+        return new ArrayList<>(size);
+    }
+
+    static List<Integer> mutableIntegerListWithCapacity(int size) {
         return new ArrayList<>(size);
     }
 }

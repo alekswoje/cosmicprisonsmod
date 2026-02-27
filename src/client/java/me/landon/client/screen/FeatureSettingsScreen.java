@@ -305,31 +305,8 @@ public final class FeatureSettingsScreen extends Screen {
         int exampleWidth = (popupLayout.width - 28 - examplesGap) / 2;
         int leftExampleX = x + 14;
         int rightExampleX = leftExampleX + exampleWidth + examplesGap;
-
-        drawPopupExample(
-                drawContext,
-                leftExampleX,
-                examplesY,
-                exampleWidth,
-                Items.LIGHT_BLUE_DYE,
-                ProtocolConstants.OVERLAY_TYPE_COSMIC_ENERGY,
-                Text.translatable(
-                                "text.cosmicprisonsmod.feature.inventory_item_overlays.example.cosmic_value")
-                        .getString(),
-                Text.translatable(
-                        "text.cosmicprisonsmod.feature.inventory_item_overlays.example.cosmic_label"));
-        drawPopupExample(
-                drawContext,
-                rightExampleX,
-                examplesY,
-                exampleWidth,
-                Items.PAPER,
-                ProtocolConstants.OVERLAY_TYPE_MONEY_NOTE,
-                Text.translatable(
-                                "text.cosmicprisonsmod.feature.inventory_item_overlays.example.money_value")
-                        .getString(),
-                Text.translatable(
-                        "text.cosmicprisonsmod.feature.inventory_item_overlays.example.money_label"));
+        renderPopupExamples(
+                drawContext, feature, leftExampleX, rightExampleX, examplesY, exampleWidth);
 
         drawContext.fill(
                 popupLayout.closeX,
@@ -368,6 +345,64 @@ public final class FeatureSettingsScreen extends Screen {
         drawContext.drawItem(item.getDefaultStack(), itemX, itemY);
         drawOverlayTextOnItem(drawContext, itemX, itemY, overlayType, overlayText, 0.56F);
         drawContext.drawTextWithShadow(textRenderer, label, x + 27, y + 11, 0xFFE7EEF9);
+    }
+
+    private void drawPopupTextExample(DrawContext drawContext, int x, int y, int width, Text text) {
+        drawContext.fill(x, y, x + width, y + 31, withAlpha(0x1A2436, 220));
+        drawContext.fill(x, y, x + width, y + 1, withAlpha(0x354B70, 255));
+        drawContext.drawWrappedTextWithShadow(
+                textRenderer, text, x + 7, y + 9, width - 14, 0xFFE7EEF9);
+    }
+
+    private void renderPopupExamples(
+            DrawContext drawContext,
+            ClientFeatureDefinition feature,
+            int leftExampleX,
+            int rightExampleX,
+            int examplesY,
+            int exampleWidth) {
+        if (ClientFeatures.PEACEFUL_MINING_ID.equals(feature.id())) {
+            drawPopupTextExample(
+                    drawContext,
+                    leftExampleX,
+                    examplesY,
+                    exampleWidth,
+                    Text.translatable(
+                            "text.cosmicprisonsmod.feature.peaceful_mining.example.player_blocking"));
+            drawPopupTextExample(
+                    drawContext,
+                    rightExampleX,
+                    examplesY,
+                    exampleWidth,
+                    Text.translatable(
+                            "text.cosmicprisonsmod.feature.peaceful_mining.example.mine_through"));
+            return;
+        }
+
+        drawPopupExample(
+                drawContext,
+                leftExampleX,
+                examplesY,
+                exampleWidth,
+                Items.LIGHT_BLUE_DYE,
+                ProtocolConstants.OVERLAY_TYPE_COSMIC_ENERGY,
+                Text.translatable(
+                                "text.cosmicprisonsmod.feature.inventory_item_overlays.example.cosmic_value")
+                        .getString(),
+                Text.translatable(
+                        "text.cosmicprisonsmod.feature.inventory_item_overlays.example.cosmic_label"));
+        drawPopupExample(
+                drawContext,
+                rightExampleX,
+                examplesY,
+                exampleWidth,
+                Items.PAPER,
+                ProtocolConstants.OVERLAY_TYPE_MONEY_NOTE,
+                Text.translatable(
+                                "text.cosmicprisonsmod.feature.inventory_item_overlays.example.money_value")
+                        .getString(),
+                Text.translatable(
+                        "text.cosmicprisonsmod.feature.inventory_item_overlays.example.money_label"));
     }
 
     private void openPopup(String featureId) {
@@ -429,6 +464,11 @@ public final class FeatureSettingsScreen extends Screen {
 
         int itemX = x + 9;
         int itemY = y + 9;
+
+        if (ClientFeatures.PEACEFUL_MINING_ID.equals(feature.id())) {
+            drawContext.drawItem(Items.IRON_PICKAXE.getDefaultStack(), itemX, itemY);
+            return;
+        }
 
         if (ClientFeatures.INVENTORY_ITEM_OVERLAYS_ID.equals(feature.id())) {
             drawContext.drawItem(Items.PAPER.getDefaultStack(), itemX, itemY);
@@ -492,6 +532,10 @@ public final class FeatureSettingsScreen extends Screen {
     }
 
     private int featureAccentColor(String featureId) {
+        if (ClientFeatures.PEACEFUL_MINING_ID.equals(featureId)) {
+            return 0x61C08D;
+        }
+
         if (ClientFeatures.INVENTORY_ITEM_OVERLAYS_ID.equals(featureId)) {
             return 0x46A9FF;
         }

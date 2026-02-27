@@ -34,11 +34,15 @@ import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.render.RenderTickCounter;
 import net.minecraft.client.world.ClientWorld;
+import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.ItemStack;
 import net.minecraft.screen.ScreenHandler;
 import net.minecraft.screen.slot.Slot;
 import net.minecraft.text.Text;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.EntityHitResult;
+import net.minecraft.util.hit.HitResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -67,6 +71,7 @@ public final class CompanionClientRuntime {
     private ItemStack activeCursorOverlayStack = ItemStack.EMPTY;
     private int activeCursorOverlaySlot = -1;
     private int pendingCursorOverlayFrames;
+    private volatile int activePeacefulMiningTargetEntityId = -1;
     private boolean initialized;
 
     public static CompanionClientRuntime getInstance() {
@@ -126,8 +131,55 @@ public final class CompanionClientRuntime {
                 .orElse(false);
     }
 
-    public void renderHandledScreenSlotOverlay(
-            DrawContext drawContext, Slot slot, int screenLeft, int screenTop) {
+    public void onCrosshairTargetUpdated(MinecraftClient client, float tickDelta) {
+        synchronized (this) {
+            if (!shouldApplyPeacefulMiningPassThrough(client)) {
+                clearActivePeacefulMiningTarget();
+                return;
+            }
+
+            HitResult currentTarget = client.crosshairTarget;
+
+            if (!(currentTarget instanceof EntityHitResult entityHitResult)) {
+                clearActivePeacefulMiningTarget();
+                return;
+            }
+
+            int entityId = entityHitResult.getEntity().getId();
+
+            if (!session.isPeacefulMiningPassThroughEntity(entityId)) {
+                clearActivePeacefulMiningTarget();
+                return;
+            }
+
+            Entity cameraEntity = client.getCameraEntity();
+
+            if (cameraEntity == null || client.player == null) {
+                clearActivePeacefulMiningTarget();
+                return;
+            }
+
+            HitResult blockOnlyHit =
+                    cameraEntity.raycast(
+                            client.player.getBlockInteractionRange(), tickDelta, false);
+
+            if (!(blockOnlyHit instanceof BlockHitResult blockHitResult)
+                    || blockHitResult.getType() != HitResult.Type.BLOCK) {
+                clearActivePeacefulMiningTarget();
+                return;
+            }
+
+            client.crosshairTarget = blockHitResult;
+            client.targetedEntity = null;
+            activePeacefulMiningTargetEntityId = entityId;
+        }
+    }
+
+    public boolean isPeacefulMiningGhostedEntity(int entityId) {
+        return entityId >= 0 && entityId == activePeacefulMiningTargetEntityId;
+    }
+
+    public void renderHandledScreenSlotOverlay(DrawContext drawContext, Slot slot) {
         if (slot == null || !slot.hasStack()) {
             return;
         }
@@ -148,7 +200,7 @@ public final class CompanionClientRuntime {
             return;
         }
 
-        drawOverlayText(drawContext, screenLeft + slot.x, screenTop + slot.y, overlayEntry);
+        drawOverlayText(drawContext, slot.x, slot.y, overlayEntry);
     }
 
     public void renderHandledScreenCursorOverlay(
@@ -243,6 +295,7 @@ public final class CompanionClientRuntime {
     private synchronized void onJoin(MinecraftClient client) {
         session.reset();
         clearOverlayRenderCaches();
+        clearActivePeacefulMiningTarget();
         helloRetryTicks = ProtocolConstants.CLIENT_HELLO_RETRY_TICKS;
         helloUnavailableLogged = false;
         attemptSendClientHello(client);
@@ -251,6 +304,7 @@ public final class CompanionClientRuntime {
     private synchronized void onDisconnect() {
         session.reset();
         clearOverlayRenderCaches();
+        clearActivePeacefulMiningTarget();
         helloRetryTicks = 0;
         helloUnavailableLogged = false;
     }
@@ -269,7 +323,9 @@ public final class CompanionClientRuntime {
     private synchronized void onWorldChange(MinecraftClient client, ClientWorld world) {
         if (world == null) {
             session.clearInventoryItemOverlays();
+            session.clearPeacefulMiningPassThroughIds();
             clearOverlayRenderCaches();
+            clearActivePeacefulMiningTarget();
         }
     }
 
@@ -320,6 +376,8 @@ public final class CompanionClientRuntime {
         switch (message) {
             case ProtocolMessage.ServerHelloS2C serverHello ->
                     handleServerHello(frame.protocolVersion(), serverHello, client);
+            case ProtocolMessage.EntityMarkerDeltaS2C markerDelta ->
+                    handleEntityMarkerDelta(markerDelta);
             case ProtocolMessage.InventoryItemOverlaysS2C overlays ->
                     handleInventoryItemOverlays(overlays);
             default -> {}
@@ -359,11 +417,20 @@ public final class CompanionClientRuntime {
                 (serverHello.serverFeatureFlagsBitset()
                                 & ProtocolConstants.SERVER_FEATURE_INVENTORY_ITEM_OVERLAYS)
                         != 0;
+        boolean supportsEntityMarkers =
+                (serverHello.serverFeatureFlagsBitset()
+                                & ProtocolConstants.SERVER_FEATURE_ENTITY_MARKERS)
+                        != 0;
         session.setInventoryItemOverlaysSupported(supportsInventoryItemOverlays);
 
         if (!supportsInventoryItemOverlays) {
             session.clearInventoryItemOverlays();
             clearOverlayRenderCaches();
+        }
+
+        if (!supportsEntityMarkers) {
+            session.clearPeacefulMiningPassThroughIds();
+            clearActivePeacefulMiningTarget();
         }
     }
 
@@ -377,6 +444,16 @@ public final class CompanionClientRuntime {
         if (overlays.overlays().isEmpty()) {
             clearOverlayRenderCaches();
         }
+    }
+
+    private void handleEntityMarkerDelta(ProtocolMessage.EntityMarkerDeltaS2C markerDelta) {
+        if (markerDelta.markerType()
+                != ProtocolConstants.MARKER_TYPE_PEACEFUL_MINING_PASS_THROUGH) {
+            return;
+        }
+
+        session.applyPeacefulMiningPassThroughDelta(
+                markerDelta.addEntityIds(), markerDelta.removeEntityIds());
     }
 
     private ConnectionSessionState.ItemOverlayEntry resolveSlotOverlayEntry(Slot slot) {
@@ -514,6 +591,10 @@ public final class CompanionClientRuntime {
         activeCursorOverlayStack = ItemStack.EMPTY;
         activeCursorOverlaySlot = -1;
         pendingCursorOverlayFrames = 0;
+    }
+
+    private void clearActivePeacefulMiningTarget() {
+        activePeacefulMiningTargetEntityId = -1;
     }
 
     private void clearOverlayRenderCaches() {
@@ -697,6 +778,25 @@ public final class CompanionClientRuntime {
                 && getFeatureToggleState(ClientFeatures.INVENTORY_ITEM_OVERLAYS_ID);
     }
 
+    private boolean shouldApplyPeacefulMiningPassThrough(MinecraftClient client) {
+        if (client == null
+                || client.player == null
+                || client.world == null
+                || client.options == null) {
+            return false;
+        }
+
+        if (!session.gateState().isEnabled()
+                || !isFeatureSupportedByServer(ClientFeatures.PEACEFUL_MINING_ID)
+                || !getFeatureToggleState(ClientFeatures.PEACEFUL_MINING_ID)) {
+            return false;
+        }
+
+        return client.options.attackKey.isPressed()
+                || (client.interactionManager != null
+                        && client.interactionManager.isBreakingBlock());
+    }
+
     private static void drawOverlayText(
             DrawContext drawContext,
             int slotX,
@@ -733,7 +833,6 @@ public final class CompanionClientRuntime {
         int backgroundRight = Math.min(slotX + 16, textX + scaledTextWidth + 1);
         int backgroundBottom = Math.min(slotY + 16, textY + scaledTextHeight + 1);
 
-        drawContext.enableScissor(slotX, slotY, slotX + 16, slotY + 16);
         drawContext.fill(
                 backgroundLeft, backgroundTop, backgroundRight, backgroundBottom, backgroundColor);
         drawContext.getMatrices().pushMatrix();
@@ -741,7 +840,6 @@ public final class CompanionClientRuntime {
         drawContext.getMatrices().scale(textScale, textScale);
         drawContext.drawTextWithShadow(textRenderer, displayText, 0, 0, textColor);
         drawContext.getMatrices().popMatrix();
-        drawContext.disableScissor();
     }
 
     private static int colorForOverlayType(int overlayType) {

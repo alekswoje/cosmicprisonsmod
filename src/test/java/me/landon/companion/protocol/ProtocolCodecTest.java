@@ -44,6 +44,15 @@ class ProtocolCodecTest {
     }
 
     @Test
+    void roundtripEntityMarkerDelta() throws Exception {
+        assertRoundtrip(
+                new ProtocolMessage.EntityMarkerDeltaS2C(
+                        ProtocolConstants.MARKER_TYPE_PEACEFUL_MINING_PASS_THROUGH,
+                        List.of(45, 72, 1099),
+                        List.of(3, 18)));
+    }
+
+    @Test
     void rejectsOversizedString() {
         BinaryWriter writer = new BinaryWriter();
         writer.writeVarInt(ProtocolConstants.PROTOCOL_VERSION);
@@ -83,6 +92,30 @@ class ProtocolCodecTest {
         writer.writeVarInt(ProtocolConstants.PROTOCOL_VERSION);
         writer.writeVarInt(MessageType.INVENTORY_ITEM_OVERLAYS_S2C.id());
         writer.writeVarInt(ProtocolConstants.MAX_ITEM_OVERLAY_COUNT + 1);
+
+        assertThrows(BinaryDecodingException.class, () -> codec.decode(writer.toByteArray()));
+    }
+
+    @Test
+    void rejectsOversizedMarkerAddCount() {
+        BinaryWriter writer = new BinaryWriter();
+        writer.writeVarInt(ProtocolConstants.PROTOCOL_VERSION);
+        writer.writeVarInt(MessageType.ENTITY_MARKER_DELTA_S2C.id());
+        writer.writeVarInt(ProtocolConstants.MARKER_TYPE_PEACEFUL_MINING_PASS_THROUGH);
+        writer.writeVarInt(ProtocolConstants.MAX_ENTITY_DELTA + 1);
+        writer.writeVarInt(0);
+
+        assertThrows(BinaryDecodingException.class, () -> codec.decode(writer.toByteArray()));
+    }
+
+    @Test
+    void rejectsOversizedMarkerRemoveCount() {
+        BinaryWriter writer = new BinaryWriter();
+        writer.writeVarInt(ProtocolConstants.PROTOCOL_VERSION);
+        writer.writeVarInt(MessageType.ENTITY_MARKER_DELTA_S2C.id());
+        writer.writeVarInt(ProtocolConstants.MARKER_TYPE_PEACEFUL_MINING_PASS_THROUGH);
+        writer.writeVarInt(0);
+        writer.writeVarInt(ProtocolConstants.MAX_ENTITY_DELTA + 1);
 
         assertThrows(BinaryDecodingException.class, () -> codec.decode(writer.toByteArray()));
     }

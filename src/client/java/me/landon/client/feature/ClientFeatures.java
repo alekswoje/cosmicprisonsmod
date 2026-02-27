@@ -6,6 +6,16 @@ import java.util.OptionalInt;
 import me.landon.companion.protocol.ProtocolConstants;
 
 public final class ClientFeatures {
+    public static final String PEACEFUL_MINING_ID = "peaceful_mining";
+    public static final ClientFeatureDefinition PEACEFUL_MINING =
+            new ClientFeatureDefinition(
+                    PEACEFUL_MINING_ID,
+                    "text.cosmicprisonsmod.feature.peaceful_mining.name",
+                    "text.cosmicprisonsmod.feature.peaceful_mining.icon",
+                    "text.cosmicprisonsmod.feature.peaceful_mining.description",
+                    true,
+                    OptionalInt.of(ProtocolConstants.SERVER_FEATURE_ENTITY_MARKERS));
+
     public static final String INVENTORY_ITEM_OVERLAYS_ID = "inventory_item_overlays";
     public static final ClientFeatureDefinition INVENTORY_ITEM_OVERLAYS =
             new ClientFeatureDefinition(
@@ -16,7 +26,8 @@ public final class ClientFeatures {
                     true,
                     OptionalInt.of(ProtocolConstants.SERVER_FEATURE_INVENTORY_ITEM_OVERLAYS));
 
-    private static final List<ClientFeatureDefinition> ALL = List.of(INVENTORY_ITEM_OVERLAYS);
+    private static final List<ClientFeatureDefinition> ALL =
+            List.of(PEACEFUL_MINING, INVENTORY_ITEM_OVERLAYS);
 
     private ClientFeatures() {}
 

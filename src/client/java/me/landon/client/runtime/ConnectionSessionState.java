@@ -1,5 +1,8 @@
 package me.landon.client.runtime;
 
+import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
+import it.unimi.dsi.fastutil.ints.IntSet;
+import it.unimi.dsi.fastutil.ints.IntSets;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -12,6 +15,7 @@ public final class ConnectionSessionState {
 
     private final ConnectionGateState gateState = new ConnectionGateState();
     private final Map<Integer, ItemOverlayEntry> inventoryItemOverlays = new LinkedHashMap<>();
+    private final IntSet peacefulMiningPassThroughIds = new IntOpenHashSet();
 
     private String serverId = "";
     private String serverPluginVersion = "";
@@ -28,6 +32,7 @@ public final class ConnectionSessionState {
     public void reset() {
         gateState.reset();
         clearInventoryItemOverlays();
+        clearPeacefulMiningPassThroughIds();
         serverId = "";
         serverPluginVersion = "";
         serverFeatureFlags = 0;
@@ -81,6 +86,37 @@ public final class ConnectionSessionState {
 
     public void clearInventoryItemOverlays() {
         inventoryItemOverlays.clear();
+    }
+
+    public void applyPeacefulMiningPassThroughDelta(
+            List<Integer> addEntityIds, List<Integer> removeEntityIds) {
+        for (int entityId : addEntityIds) {
+            if (entityId < 0) {
+                continue;
+            }
+
+            peacefulMiningPassThroughIds.add(entityId);
+        }
+
+        for (int entityId : removeEntityIds) {
+            if (entityId < 0) {
+                continue;
+            }
+
+            peacefulMiningPassThroughIds.remove(entityId);
+        }
+    }
+
+    public boolean isPeacefulMiningPassThroughEntity(int entityId) {
+        return entityId >= 0 && peacefulMiningPassThroughIds.contains(entityId);
+    }
+
+    public IntSet peacefulMiningPassThroughIdsSnapshot() {
+        return IntSets.unmodifiable(new IntOpenHashSet(peacefulMiningPassThroughIds));
+    }
+
+    public void clearPeacefulMiningPassThroughIds() {
+        peacefulMiningPassThroughIds.clear();
     }
 
     public ItemOverlayEntry getInventoryItemOverlay(int slot) {

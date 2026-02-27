@@ -16,17 +16,12 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class HandledScreenItemOverlayMixin<T extends ScreenHandler> {
     @Shadow protected T handler;
 
-    @Shadow protected int x;
-
-    @Shadow protected int y;
-
     @Shadow private Slot lastClickedSlot;
 
     @Inject(method = "drawSlot", at = @At("TAIL"))
     private void cosmicprisonsmod$drawInventoryItemOverlay(
             DrawContext drawContext, Slot slot, int mouseX, int mouseY, CallbackInfo callbackInfo) {
-        CompanionClientRuntime.getInstance()
-                .renderHandledScreenSlotOverlay(drawContext, slot, x, y);
+        CompanionClientRuntime.getInstance().renderHandledScreenSlotOverlay(drawContext, slot);
     }
 
     @Inject(
@@ -51,13 +46,9 @@ public abstract class HandledScreenItemOverlayMixin<T extends ScreenHandler> {
         CompanionClientRuntime.getInstance().rememberHandledScreenSlotClickOverlay(slot);
     }
 
-    @Inject(method = "render", at = @At("TAIL"))
+    @Inject(method = "renderCursorStack", at = @At("TAIL"))
     private void cosmicprisonsmod$drawDraggedItemOverlay(
-            DrawContext drawContext,
-            int mouseX,
-            int mouseY,
-            float deltaTicks,
-            CallbackInfo callbackInfo) {
+            DrawContext drawContext, int mouseX, int mouseY, CallbackInfo callbackInfo) {
         CompanionClientRuntime.getInstance()
                 .renderHandledScreenCursorOverlay(
                         drawContext, handler, lastClickedSlot, mouseX, mouseY);

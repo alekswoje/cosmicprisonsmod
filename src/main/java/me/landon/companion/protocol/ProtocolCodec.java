@@ -1,5 +1,6 @@
 package me.landon.companion.protocol;
 
+import java.util.List;
 import java.util.Optional;
 
 public final class ProtocolCodec {
@@ -32,6 +33,19 @@ public final class ProtocolCodec {
                     writer.writeByte(signature.length);
                     writer.writeBytes(signature);
                 }
+            }
+            case ProtocolMessage.EntityMarkerDeltaS2C markerDelta -> {
+                writer.writeVarInt(markerDelta.markerType());
+                writeIntegerList(
+                        writer,
+                        markerDelta.addEntityIds(),
+                        ProtocolConstants.MAX_ENTITY_DELTA,
+                        "addCount");
+                writeIntegerList(
+                        writer,
+                        markerDelta.removeEntityIds(),
+                        ProtocolConstants.MAX_ENTITY_DELTA,
+                        "removeCount");
             }
             case ProtocolMessage.InventoryItemOverlaysS2C overlays -> {
                 writeBoundedCount(
@@ -78,6 +92,7 @@ public final class ProtocolCodec {
                             reader.readString(ProtocolConstants.MAX_STRING_BYTES),
                             reader.readVarInt());
             case SERVER_HELLO_S2C -> decodeServerHello(reader);
+            case ENTITY_MARKER_DELTA_S2C -> decodeEntityMarkerDelta(reader);
             case INVENTORY_ITEM_OVERLAYS_S2C -> decodeInventoryItemOverlays(reader);
         };
     }
@@ -103,6 +118,16 @@ public final class ProtocolCodec {
         return new ProtocolMessage.ServerHelloS2C(serverId, pluginVersion, featureFlags, signature);
     }
 
+    private ProtocolMessage.EntityMarkerDeltaS2C decodeEntityMarkerDelta(BinaryReader reader)
+            throws BinaryDecodingException {
+        int markerType = reader.readVarInt();
+        List<Integer> addIds =
+                readIntegerList(reader, ProtocolConstants.MAX_ENTITY_DELTA, "addCount");
+        List<Integer> removeIds =
+                readIntegerList(reader, ProtocolConstants.MAX_ENTITY_DELTA, "removeCount");
+        return new ProtocolMessage.EntityMarkerDeltaS2C(markerType, addIds, removeIds);
+    }
+
     private ProtocolMessage.InventoryItemOverlaysS2C decodeInventoryItemOverlays(
             BinaryReader reader) throws BinaryDecodingException {
         int overlayCount =
@@ -117,6 +142,27 @@ public final class ProtocolCodec {
         }
 
         return new ProtocolMessage.InventoryItemOverlaysS2C(overlays);
+    }
+
+    private static void writeIntegerList(
+            BinaryWriter writer, List<Integer> values, int maxCount, String fieldName) {
+        writeBoundedCount(writer, values.size(), maxCount, fieldName);
+
+        for (int value : values) {
+            writer.writeVarInt(value);
+        }
+    }
+
+    private static List<Integer> readIntegerList(
+            BinaryReader reader, int maxCount, String fieldName) throws BinaryDecodingException {
+        int count = readBoundedCount(reader, maxCount, fieldName);
+        List<Integer> values = ProtocolMessage.mutableIntegerListWithCapacity(count);
+
+        for (int index = 0; index < count; index++) {
+            values.add(reader.readVarInt());
+        }
+
+        return values;
     }
 
     private static void writeBoundedCount(
