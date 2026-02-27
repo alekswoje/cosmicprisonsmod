@@ -27,11 +27,13 @@ public final class FeatureSettingsScreen extends Screen {
 
     private final CompanionClientRuntime runtime;
     private final List<ButtonWidget> mainButtons = new ArrayList<>();
+    private final List<PopupActionButton> popupActionButtons = new ArrayList<>();
     private List<ClientFeatureDefinition> features = List.of();
 
     private String popupFeatureId;
     private boolean popupOpening;
     private float popupProgress;
+    private PopupPingCaptureTarget popupPingCaptureTarget = PopupPingCaptureTarget.NONE;
 
     public FeatureSettingsScreen(CompanionClientRuntime runtime) {
         super(Text.translatable("text.cosmicprisonsmod.settings.title"));
@@ -78,79 +80,13 @@ public final class FeatureSettingsScreen extends Screen {
             mainButtons.add(toggleButton);
         }
 
-        int footerY = height - 30;
-        int footerButtonCount = 4;
-        int footerGap = 8;
-        int footerButtonWidth =
-                Math.max(
-                        84,
-                        Math.min(
-                                106,
-                                (width - 24 - (footerGap * (footerButtonCount - 1)))
-                                        / footerButtonCount));
-        int footerStartX =
-                (width
-                                - ((footerButtonWidth * footerButtonCount)
-                                        + (footerGap * (footerButtonCount - 1))))
-                        / 2;
-
-        ButtonWidget hudLayoutButton =
-                addDrawableChild(
-                        ButtonWidget.builder(
-                                        Text.translatable(
-                                                "text.cosmicprisonsmod.settings.button.hud_layout"),
-                                        button ->
-                                                client.setScreen(
-                                                        new HudLayoutEditorScreen(runtime, this)))
-                                .dimensions(footerStartX, footerY, footerButtonWidth, 20)
-                                .build());
-        mainButtons.add(hudLayoutButton);
-
-        ButtonWidget eventFiltersButton =
-                addDrawableChild(
-                        ButtonWidget.builder(
-                                        Text.translatable(
-                                                "text.cosmicprisonsmod.settings.button.event_filters"),
-                                        button ->
-                                                client.setScreen(
-                                                        new HudEventVisibilityScreen(
-                                                                runtime, this)))
-                                .dimensions(
-                                        footerStartX + footerButtonWidth + footerGap,
-                                        footerY,
-                                        footerButtonWidth,
-                                        20)
-                                .build());
-        mainButtons.add(eventFiltersButton);
-
-        ButtonWidget pingKeysButton =
-                addDrawableChild(
-                        ButtonWidget.builder(
-                                        Text.translatable(
-                                                "text.cosmicprisonsmod.settings.button.ping_keys"),
-                                        button ->
-                                                client.setScreen(
-                                                        new PingKeybindSettingsScreen(
-                                                                runtime, this)))
-                                .dimensions(
-                                        footerStartX + ((footerButtonWidth + footerGap) * 2),
-                                        footerY,
-                                        footerButtonWidth,
-                                        20)
-                                .build());
-        mainButtons.add(pingKeysButton);
-
         ButtonWidget doneButton =
                 addDrawableChild(
                         ButtonWidget.builder(
                                         Text.translatable(
                                                 "text.cosmicprisonsmod.settings.button.done"),
                                         button -> close())
-                                .dimensions(
-                                        footerStartX + ((footerButtonWidth + footerGap) * 3),
-                                        footerY,
-                                        footerButtonWidth,
-                                        20)
+                                .dimensions((width / 2) - 84, height - 30, 168, 20)
                                 .build());
         mainButtons.add(doneButton);
 
@@ -163,6 +99,7 @@ public final class FeatureSettingsScreen extends Screen {
 
         if (popupFeatureId == null) {
             popupProgress = 0.0F;
+            popupActionButtons.clear();
             return;
         }
 
@@ -183,6 +120,24 @@ public final class FeatureSettingsScreen extends Screen {
 
     @Override
     public boolean keyPressed(KeyInput keyInput) {
+        if (popupFeatureId != null
+                && ClientFeatures.PINGS_ID.equals(popupFeatureId)
+                && popupPingCaptureTarget != PopupPingCaptureTarget.NONE) {
+            if (keyInput.getKeycode() == GLFW.GLFW_KEY_ESCAPE) {
+                popupPingCaptureTarget = PopupPingCaptureTarget.NONE;
+                return true;
+            }
+
+            if (popupPingCaptureTarget == PopupPingCaptureTarget.GANG) {
+                runtime.bindGangPingKey(keyInput);
+            } else if (popupPingCaptureTarget == PopupPingCaptureTarget.TRUCE) {
+                runtime.bindTrucePingKey(keyInput);
+            }
+
+            popupPingCaptureTarget = PopupPingCaptureTarget.NONE;
+            return true;
+        }
+
         if (keyInput.getKeycode() == GLFW.GLFW_KEY_ESCAPE && popupFeatureId != null) {
             closePopup();
             return true;
@@ -194,7 +149,62 @@ public final class FeatureSettingsScreen extends Screen {
     @Override
     public boolean mouseClicked(Click click, boolean doubleClick) {
         if (popupFeatureId != null && popupProgress > 0.05F) {
+            for (PopupActionButton actionButton : popupActionButtons) {
+                if (!isPointWithin(
+                        click.x(),
+                        click.y(),
+                        actionButton.x(),
+                        actionButton.y(),
+                        actionButton.width(),
+                        actionButton.height())) {
+                    continue;
+                }
+
+                actionButton.action().run();
+                return true;
+            }
+
             PopupLayout popupLayout = popupLayout(popupProgress);
+            ClientFeatureDefinition feature = featureById(popupFeatureId);
+
+            if (feature != null && ClientFeatures.PINGS_ID.equals(feature.id())) {
+                PingKeyControlsLayout keyControlsLayout = pingKeyControlsLayout(popupLayout);
+
+                if (isPointWithin(
+                        click.x(),
+                        click.y(),
+                        keyControlsLayout.gangX,
+                        keyControlsLayout.y,
+                        keyControlsLayout.buttonWidth,
+                        keyControlsLayout.buttonHeight)) {
+                    popupPingCaptureTarget = PopupPingCaptureTarget.GANG;
+                    return true;
+                }
+
+                if (isPointWithin(
+                        click.x(),
+                        click.y(),
+                        keyControlsLayout.truceX,
+                        keyControlsLayout.y,
+                        keyControlsLayout.buttonWidth,
+                        keyControlsLayout.buttonHeight)) {
+                    popupPingCaptureTarget = PopupPingCaptureTarget.TRUCE;
+                    return true;
+                }
+
+                if (isPointWithin(
+                        click.x(),
+                        click.y(),
+                        keyControlsLayout.resetX,
+                        keyControlsLayout.resetY,
+                        keyControlsLayout.resetWidth,
+                        keyControlsLayout.resetHeight)) {
+                    runtime.resetPingKeybindsToDefault();
+                    popupPingCaptureTarget = PopupPingCaptureTarget.NONE;
+                    return true;
+                }
+            }
+
             boolean clickedClose =
                     isPointWithin(
                             click.x(),
@@ -373,6 +383,54 @@ public final class FeatureSettingsScreen extends Screen {
         int rightExampleX = leftExampleX + exampleWidth + examplesGap;
         renderPopupExamples(
                 drawContext, feature, leftExampleX, rightExampleX, examplesY, exampleWidth);
+        renderPopupActions(drawContext, feature, popupLayout, accentColor);
+
+        if (ClientFeatures.PINGS_ID.equals(feature.id())) {
+            PingKeyControlsLayout keyControlsLayout = pingKeyControlsLayout(popupLayout);
+            drawPingKeyControl(
+                    drawContext,
+                    keyControlsLayout.gangX,
+                    keyControlsLayout.y,
+                    keyControlsLayout.buttonWidth,
+                    keyControlsLayout.buttonHeight,
+                    0x3E6EA0,
+                    Text.translatable(
+                            "text.cosmicprisonsmod.feature.pings.bind.gang",
+                            popupPingCaptureTarget == PopupPingCaptureTarget.GANG
+                                    ? Text.translatable("text.cosmicprisonsmod.ping_keys.waiting")
+                                    : runtime.gangPingKeybindLabel()));
+            drawPingKeyControl(
+                    drawContext,
+                    keyControlsLayout.truceX,
+                    keyControlsLayout.y,
+                    keyControlsLayout.buttonWidth,
+                    keyControlsLayout.buttonHeight,
+                    0x9E6B39,
+                    Text.translatable(
+                            "text.cosmicprisonsmod.feature.pings.bind.truce",
+                            popupPingCaptureTarget == PopupPingCaptureTarget.TRUCE
+                                    ? Text.translatable("text.cosmicprisonsmod.ping_keys.waiting")
+                                    : runtime.trucePingKeybindLabel()));
+
+            drawContext.fill(
+                    keyControlsLayout.resetX,
+                    keyControlsLayout.resetY,
+                    keyControlsLayout.resetX + keyControlsLayout.resetWidth,
+                    keyControlsLayout.resetY + keyControlsLayout.resetHeight,
+                    withAlpha(0x324B73, 255));
+            drawContext.drawCenteredTextWithShadow(
+                    textRenderer,
+                    Text.translatable("text.cosmicprisonsmod.ping_keys.reset_button"),
+                    keyControlsLayout.resetX + (keyControlsLayout.resetWidth / 2),
+                    keyControlsLayout.resetY + 5,
+                    0xFFFFFFFF);
+            drawContext.drawTextWithShadow(
+                    textRenderer,
+                    Text.translatable("text.cosmicprisonsmod.feature.pings.bind_hint"),
+                    x + 14,
+                    keyControlsLayout.resetY + 5,
+                    0xFFC8D7EA);
+        }
 
         drawContext.fill(
                 popupLayout.closeX,
@@ -548,11 +606,15 @@ public final class FeatureSettingsScreen extends Screen {
         popupFeatureId = featureId;
         popupProgress = 0.0F;
         popupOpening = true;
+        popupPingCaptureTarget = PopupPingCaptureTarget.NONE;
+        popupActionButtons.clear();
         updateMainButtonsState();
     }
 
     private void closePopup() {
         popupOpening = false;
+        popupPingCaptureTarget = PopupPingCaptureTarget.NONE;
+        popupActionButtons.clear();
     }
 
     private void updateMainButtonsState() {
@@ -768,6 +830,137 @@ public final class FeatureSettingsScreen extends Screen {
         };
     }
 
+    private void renderPopupActions(
+            DrawContext drawContext,
+            ClientFeatureDefinition feature,
+            PopupLayout popupLayout,
+            int accentColor) {
+        popupActionButtons.clear();
+        List<PopupActionDefinition> actions = popupActionsForFeature(feature.id());
+
+        if (actions.isEmpty()) {
+            return;
+        }
+
+        int gap = 6;
+        int buttonHeight = 18;
+        int availableWidth = popupLayout.width - 28;
+        int buttonWidth = (availableWidth - (gap * (actions.size() - 1))) / actions.size();
+        int startX = popupLayout.x + 14;
+        int buttonY = popupLayout.closeY - 22;
+
+        for (int index = 0; index < actions.size(); index++) {
+            PopupActionDefinition actionDefinition = actions.get(index);
+            int buttonX = startX + (index * (buttonWidth + gap));
+            int bottom = buttonY + buttonHeight;
+            drawContext.fill(
+                    buttonX, buttonY, buttonX + buttonWidth, bottom, withAlpha(0x1A273C, 236));
+            drawContext.fill(
+                    buttonX,
+                    buttonY,
+                    buttonX + buttonWidth,
+                    buttonY + 1,
+                    withAlpha(accentColor, 255));
+            drawContext.fill(
+                    buttonX, bottom - 1, buttonX + buttonWidth, bottom, withAlpha(0x39516F, 255));
+            drawContext.fill(buttonX, buttonY, buttonX + 1, bottom, withAlpha(0x39516F, 255));
+            drawContext.fill(
+                    buttonX + buttonWidth - 1,
+                    buttonY,
+                    buttonX + buttonWidth,
+                    bottom,
+                    withAlpha(0x39516F, 255));
+            drawContext.drawCenteredTextWithShadow(
+                    textRenderer,
+                    Text.translatable(actionDefinition.labelTranslationKey()),
+                    buttonX + (buttonWidth / 2),
+                    buttonY + 5,
+                    0xFFFFFFFF);
+
+            popupActionButtons.add(
+                    new PopupActionButton(
+                            buttonX,
+                            buttonY,
+                            buttonWidth,
+                            buttonHeight,
+                            actionDefinition.action()));
+        }
+    }
+
+    private List<PopupActionDefinition> popupActionsForFeature(String featureId) {
+        if (ClientFeatures.HUD_EVENTS_ID.equals(featureId)) {
+            return List.of(
+                    new PopupActionDefinition(
+                            "text.cosmicprisonsmod.settings.popup.action.event_filters",
+                            () -> {
+                                if (client != null) {
+                                    client.setScreen(new HudEventVisibilityScreen(runtime, this));
+                                }
+                            }),
+                    new PopupActionDefinition(
+                            "text.cosmicprisonsmod.settings.popup.action.hud_layout",
+                            () -> {
+                                if (client != null) {
+                                    client.setScreen(new HudLayoutEditorScreen(runtime, this));
+                                }
+                            }));
+        }
+
+        if (ClientFeatures.HUD_COOLDOWNS_ID.equals(featureId)
+                || ClientFeatures.HUD_SATCHEL_DISPLAY_ID.equals(featureId)) {
+            return List.of(
+                    new PopupActionDefinition(
+                            "text.cosmicprisonsmod.settings.popup.action.hud_layout",
+                            () -> {
+                                if (client != null) {
+                                    client.setScreen(new HudLayoutEditorScreen(runtime, this));
+                                }
+                            }));
+        }
+
+        return List.of();
+    }
+
+    private void drawPingKeyControl(
+            DrawContext drawContext,
+            int x,
+            int y,
+            int width,
+            int height,
+            int accentColor,
+            Text label) {
+        int bottom = y + height;
+        drawContext.fill(x, y, x + width, bottom, withAlpha(0x172133, 236));
+        drawContext.fill(x, y, x + width, y + 1, withAlpha(accentColor, 255));
+        drawContext.fill(x, bottom - 1, x + width, bottom, withAlpha(0x385171, 255));
+        drawContext.fill(x, y, x + 1, bottom, withAlpha(0x385171, 255));
+        drawContext.fill(x + width - 1, y, x + width, bottom, withAlpha(0x385171, 255));
+        drawContext.drawCenteredTextWithShadow(
+                textRenderer, label, x + (width / 2), y + ((height - 8) / 2), 0xFFFFFFFF);
+    }
+
+    private PingKeyControlsLayout pingKeyControlsLayout(PopupLayout popupLayout) {
+        int controlsY = popupLayout.y + 152;
+        int buttonWidth = (popupLayout.width - 36) / 2;
+        int buttonHeight = 20;
+        int gangX = popupLayout.x + 14;
+        int truceX = gangX + buttonWidth + 8;
+        int resetWidth = 92;
+        int resetHeight = 18;
+        int resetX = popupLayout.x + 14;
+        int resetY = controlsY + 25;
+        return new PingKeyControlsLayout(
+                controlsY,
+                gangX,
+                truceX,
+                buttonWidth,
+                buttonHeight,
+                resetX,
+                resetY,
+                resetWidth,
+                resetHeight);
+    }
+
     private static float easeOutBack(float value) {
         float clamped = Math.max(0.0F, Math.min(1.0F, value));
         float c1 = 1.70158F;
@@ -810,4 +1003,25 @@ public final class FeatureSettingsScreen extends Screen {
             int closeY,
             int closeWidth,
             int closeHeight) {}
+
+    private record PopupActionDefinition(String labelTranslationKey, Runnable action) {}
+
+    private record PopupActionButton(int x, int y, int width, int height, Runnable action) {}
+
+    private record PingKeyControlsLayout(
+            int y,
+            int gangX,
+            int truceX,
+            int buttonWidth,
+            int buttonHeight,
+            int resetX,
+            int resetY,
+            int resetWidth,
+            int resetHeight) {}
+
+    private enum PopupPingCaptureTarget {
+        NONE,
+        GANG,
+        TRUCE
+    }
 }

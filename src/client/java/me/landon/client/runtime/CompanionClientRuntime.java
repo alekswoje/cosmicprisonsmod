@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 import me.landon.CosmicPrisonsMod;
 import me.landon.client.feature.ClientFeatureDefinition;
 import me.landon.client.feature.ClientFeatures;
@@ -59,18 +60,19 @@ import org.slf4j.LoggerFactory;
 public final class CompanionClientRuntime {
     private static final Logger LOGGER = LoggerFactory.getLogger(CompanionClientRuntime.class);
     private static final CompanionClientRuntime INSTANCE = new CompanionClientRuntime();
-    private static final int CLIENT_CAPABILITIES_BITSET = 63;
+    private static final int CLIENT_CAPABILITIES_BITSET = 127;
     private static final int PLAYER_STORAGE_MIN_SLOT = 0;
     private static final int HOTBAR_MAX_SLOT = 8;
     private static final int PLAYER_STORAGE_MAX_SLOT = 35;
     private static final int KNOWN_OVERLAY_STACK_LIMIT = 64;
     private static final int PENDING_CURSOR_OVERLAY_FRAMES = 4;
-    private static final int HUD_PANEL_MIN_WIDTH = 170;
-    private static final int HUD_PANEL_MAX_WIDTH = 320;
-    private static final int HUD_PANEL_HEADER_HEIGHT = 17;
-    private static final int HUD_PANEL_LINE_HEIGHT = 11;
-    private static final int HUD_PANEL_HORIZONTAL_PADDING = 8;
-    private static final int HUD_PANEL_VERTICAL_PADDING = 6;
+    private static final int HUD_PANEL_MIN_WIDTH = 126;
+    private static final int HUD_PANEL_MAX_WIDTH = 214;
+    private static final int HUD_PANEL_HEADER_HEIGHT = 12;
+    private static final int HUD_PANEL_HORIZONTAL_PADDING = 5;
+    private static final int HUD_PANEL_VERTICAL_PADDING = 4;
+    private static final int HUD_PANEL_EDGE_INSET = 3;
+    private static final int HUD_COOLDOWN_CIRCLE_RADIUS = 4;
     private static final KeyBinding.Category PING_KEYBIND_CATEGORY =
             KeyBinding.Category.create(Identifier.of(CosmicPrisonsMod.MOD_ID, "pings"));
     private static final int PING_PARTICLE_COLUMN_SEGMENTS = 6;
@@ -954,14 +956,13 @@ public final class CompanionClientRuntime {
                 continue;
             }
 
-            int titleWidth = textRenderer.getWidth(Text.translatable(widget.titleTranslationKey()));
-            int maxLineWidth = 0;
-            for (String line : lines) {
-                maxLineWidth = Math.max(maxLineWidth, textRenderer.getWidth(line));
-            }
-
+            int lineHeight = widgetLineHeight(widget.widgetId());
+            int titleWidth =
+                    textRenderer.getWidth(Text.translatable(widget.titleTranslationKey()))
+                            + (HUD_PANEL_HORIZONTAL_PADDING * 2);
+            int contentWidth = measureWidgetLineWidth(widget.widgetId(), lines, textRenderer);
             int desiredWidth =
-                    Math.max(titleWidth, maxLineWidth) + (HUD_PANEL_HORIZONTAL_PADDING * 2);
+                    Math.max(basePanelWidth(widget.widgetId()), Math.max(titleWidth, contentWidth));
             int clampedPanelWidth =
                     clamp(
                             desiredWidth,
@@ -972,7 +973,7 @@ public final class CompanionClientRuntime {
             int panelHeight =
                     HUD_PANEL_HEADER_HEIGHT
                             + (HUD_PANEL_VERTICAL_PADDING * 2)
-                            + (HUD_PANEL_LINE_HEIGHT * lines.size());
+                            + (lineHeight * lines.size());
 
             CompanionConfig.HudWidgetPosition position =
                     resolveWidgetPosition(currentConfig, widget.widgetId(), positionOverrides);
@@ -990,6 +991,7 @@ public final class CompanionClientRuntime {
                             panelY,
                             clampedPanelWidth,
                             panelHeight,
+                            lineHeight,
                             lines));
         }
 
@@ -1048,13 +1050,7 @@ public final class CompanionClientRuntime {
                 continue;
             }
 
-            String text = parsedLine.asText();
-            var descriptor = HudWidgetCatalog.findEventByLabel(parsedLine.label());
-            if (descriptor.isPresent()) {
-                text = "[" + descriptor.orElseThrow().iconTag() + "] " + text;
-            }
-
-            lines.add(text);
+            lines.add(parsedLine.asText());
             if (lines.size() >= ProtocolConstants.MAX_WIDGET_LINES) {
                 break;
             }
@@ -1109,38 +1105,506 @@ public final class CompanionClientRuntime {
         int right = x + panel.width();
         int bottom = y + panel.height();
         int accent = panel.accentColor();
-        int contentTop = y + HUD_PANEL_HEADER_HEIGHT;
+        int contentTop = y + HUD_PANEL_HEADER_HEIGHT + HUD_PANEL_VERTICAL_PADDING;
+        int contentLeft = x + HUD_PANEL_HORIZONTAL_PADDING;
+        int contentRight = right - HUD_PANEL_HORIZONTAL_PADDING;
 
-        drawContext.fill(x - 1, y - 1, right + 1, bottom + 1, withAlpha(0x000000, 120));
-        drawContext.fill(x, y, right, bottom, withAlpha(0x111826, editorMode ? 206 : 232));
-        drawContext.fill(x, y, right, y + HUD_PANEL_HEADER_HEIGHT, withAlpha(accent, 140));
+        drawContext.fill(
+                x - 1 - HUD_PANEL_EDGE_INSET,
+                y - 1 - HUD_PANEL_EDGE_INSET,
+                right + 1 + HUD_PANEL_EDGE_INSET,
+                bottom + 1 + HUD_PANEL_EDGE_INSET,
+                withAlpha(0x000000, 80));
+        drawContext.fill(x, y, right, bottom, withAlpha(0x0B111A, editorMode ? 188 : 210));
+        drawContext.fill(x, y, right, y + HUD_PANEL_HEADER_HEIGHT, withAlpha(0x111A2A, 228));
+        drawContext.fill(
+                x + 1, y + 1, right - 1, y + HUD_PANEL_HEADER_HEIGHT - 1, withAlpha(accent, 48));
         drawContext.fill(x, y, right, y + 1, withAlpha(accent, 255));
-        drawContext.fill(x, bottom - 1, right, bottom, withAlpha(0x384764, 255));
-        drawContext.fill(x, y, x + 1, bottom, withAlpha(0x384764, 255));
-        drawContext.fill(right - 1, y, right, bottom, withAlpha(0x384764, 255));
+        drawContext.fill(x, bottom - 1, right, bottom, withAlpha(0x2D3A4F, 255));
+        drawContext.fill(x, y, x + 1, bottom, withAlpha(0x2D3A4F, 255));
+        drawContext.fill(right - 1, y, right, bottom, withAlpha(0x2D3A4F, 255));
 
         drawContext.drawTextWithShadow(
                 textRenderer,
                 Text.translatable(panel.titleTranslationKey()),
                 x + HUD_PANEL_HORIZONTAL_PADDING,
-                y + 4,
+                y + 2,
                 0xFFFFFFFF);
 
-        int lineY = contentTop + HUD_PANEL_VERTICAL_PADDING;
-        for (String line : panel.lines()) {
-            drawContext.drawTextWithShadow(
-                    textRenderer, line, x + HUD_PANEL_HORIZONTAL_PADDING, lineY, 0xFFE8EDF8);
-            lineY += HUD_PANEL_LINE_HEIGHT;
+        if (CompanionConfig.HUD_WIDGET_COOLDOWNS_ID.equals(panel.widgetId())) {
+            drawCooldownRows(
+                    drawContext, textRenderer, panel, contentLeft, contentTop, contentRight);
+        } else if (CompanionConfig.HUD_WIDGET_EVENTS_ID.equals(panel.widgetId())) {
+            drawEventRows(drawContext, textRenderer, panel, contentLeft, contentTop, contentRight);
+        } else if (CompanionConfig.HUD_WIDGET_SATCHELS_ID.equals(panel.widgetId())) {
+            drawSatchelRows(
+                    drawContext, textRenderer, panel, contentLeft, contentTop, contentRight);
+        } else {
+            int lineY = contentTop;
+            for (String line : panel.lines()) {
+                drawContext.drawTextWithShadow(textRenderer, line, contentLeft, lineY, 0xFFE8EDF8);
+                lineY += panel.lineHeight();
+            }
         }
 
         if (editorMode) {
             drawContext.drawTextWithShadow(
                     textRenderer,
                     Text.translatable("text.cosmicprisonsmod.hud.editor.drag_hint"),
-                    right - 52,
-                    y + 4,
+                    right - 33,
+                    y + 2,
                     withAlpha(0xFFFFFF, 225));
         }
+    }
+
+    private static void drawCooldownRows(
+            DrawContext drawContext,
+            TextRenderer textRenderer,
+            HudWidgetPanel panel,
+            int contentLeft,
+            int contentTop,
+            int contentRight) {
+        long maxRemaining = 1L;
+        for (String line : panel.lines()) {
+            HudWidgetCatalog.ParsedLine parsedLine = HudWidgetCatalog.splitLine(line);
+            OptionalLong remaining = HudWidgetCatalog.parseDurationSeconds(parsedLine.value());
+            if (remaining.isPresent() && remaining.orElse(0L) > 0L) {
+                maxRemaining = Math.max(maxRemaining, remaining.orElse(0L));
+            }
+        }
+
+        maxRemaining = Math.max(maxRemaining, 3600L);
+
+        int rowY = contentTop;
+        for (String line : panel.lines()) {
+            HudWidgetCatalog.ParsedLine parsedLine = HudWidgetCatalog.splitLine(line);
+            OptionalLong remaining = HudWidgetCatalog.parseDurationSeconds(parsedLine.value());
+            float progress = progressForRemaining(remaining, maxRemaining);
+            int statusColor = statusColor(parsedLine.value(), remaining);
+
+            int circleCenterX = contentLeft + HUD_COOLDOWN_CIRCLE_RADIUS + 1;
+            int circleCenterY = rowY + (panel.lineHeight() / 2);
+            drawCircularMeter(
+                    drawContext,
+                    circleCenterX,
+                    circleCenterY,
+                    HUD_COOLDOWN_CIRCLE_RADIUS,
+                    progress,
+                    statusColor,
+                    withAlpha(0x41526D, 200));
+
+            String valueText = compactStatusText(parsedLine.value(), true);
+            int valueWidth = textRenderer.getWidth(valueText);
+            int valueX = Math.max(contentLeft + 35, contentRight - valueWidth);
+            String labelText = compactCooldownLabel(parsedLine.label());
+            int labelMaxWidth = Math.max(12, valueX - (contentLeft + 13) - 3);
+            labelText = textRenderer.trimToWidth(labelText, labelMaxWidth);
+
+            drawContext.drawTextWithShadow(
+                    textRenderer, labelText, contentLeft + 13, rowY + 1, 0xFFE4EDF8);
+            drawContext.drawTextWithShadow(textRenderer, valueText, valueX, rowY + 1, statusColor);
+
+            rowY += panel.lineHeight();
+        }
+    }
+
+    private static void drawEventRows(
+            DrawContext drawContext,
+            TextRenderer textRenderer,
+            HudWidgetPanel panel,
+            int contentLeft,
+            int contentTop,
+            int contentRight) {
+        long maxRemaining = 1L;
+        for (String line : panel.lines()) {
+            HudWidgetCatalog.ParsedLine parsedLine = HudWidgetCatalog.splitLine(line);
+            OptionalLong remaining = HudWidgetCatalog.parseDurationSeconds(parsedLine.value());
+            if (remaining.isPresent() && remaining.orElse(0L) > 0L) {
+                maxRemaining = Math.max(maxRemaining, remaining.orElse(0L));
+            }
+        }
+        maxRemaining = Math.max(maxRemaining, 7200L);
+
+        int rowY = contentTop;
+        for (String line : panel.lines()) {
+            HudWidgetCatalog.ParsedLine parsedLine = HudWidgetCatalog.splitLine(line);
+            var descriptor = HudWidgetCatalog.findEventByLabel(parsedLine.label());
+            String iconTag = descriptor.map(HudWidgetCatalog.EventDescriptor::iconTag).orElse("EV");
+            String eventKey = descriptor.map(HudWidgetCatalog.EventDescriptor::key).orElse("");
+            int rowAccent = eventAccentColor(eventKey, panel.accentColor());
+            OptionalLong remaining = HudWidgetCatalog.parseDurationSeconds(parsedLine.value());
+            int statusColor = statusColor(parsedLine.value(), remaining);
+            float progress = progressForRemaining(remaining, maxRemaining);
+
+            int iconLeft = contentLeft;
+            int iconWidth = 18;
+            int iconTop = rowY;
+            int iconBottom = rowY + panel.lineHeight() - 1;
+            drawContext.fill(
+                    iconLeft, iconTop, iconLeft + iconWidth, iconBottom, withAlpha(rowAccent, 76));
+            drawContext.fill(
+                    iconLeft,
+                    iconBottom - 1,
+                    iconLeft + iconWidth,
+                    iconBottom,
+                    withAlpha(rowAccent, 160));
+            drawContext.drawCenteredTextWithShadow(
+                    textRenderer, iconTag, iconLeft + (iconWidth / 2), rowY + 1, 0xFFF3F7FF);
+
+            String labelText = compactEventLabel(parsedLine.label());
+            String valueText = compactStatusText(parsedLine.value(), false);
+            int valueWidth = textRenderer.getWidth(valueText);
+            int valueX = Math.max(contentLeft + 64, contentRight - valueWidth);
+            int labelX = iconLeft + iconWidth + 4;
+            int labelMaxWidth = Math.max(12, valueX - labelX - 3);
+            labelText = textRenderer.trimToWidth(labelText, labelMaxWidth);
+
+            drawContext.drawTextWithShadow(textRenderer, labelText, labelX, rowY, 0xFFE4EDF8);
+            drawContext.drawTextWithShadow(textRenderer, valueText, valueX, rowY, statusColor);
+
+            int barX = labelX;
+            int barY = rowY + panel.lineHeight() - 2;
+            int barWidth = Math.max(8, valueX - barX - 3);
+            drawContext.fill(barX, barY, barX + barWidth, barY + 1, withAlpha(0x31415C, 190));
+            int filled = Math.max(0, Math.min(barWidth, Math.round(barWidth * progress)));
+            if (filled > 0) {
+                drawContext.fill(barX, barY, barX + filled, barY + 1, withAlpha(rowAccent, 240));
+            }
+
+            rowY += panel.lineHeight();
+        }
+    }
+
+    private static void drawSatchelRows(
+            DrawContext drawContext,
+            TextRenderer textRenderer,
+            HudWidgetPanel panel,
+            int contentLeft,
+            int contentTop,
+            int contentRight) {
+        int rowY = contentTop;
+        for (String line : panel.lines()) {
+            HudWidgetCatalog.ParsedLine parsedLine = HudWidgetCatalog.splitLine(line);
+            float progress = parseSatchelProgress(parsedLine.value());
+            String valueText = compactSatchelValue(parsedLine.value());
+            int valueWidth = textRenderer.getWidth(valueText);
+            int valueX = Math.max(contentLeft + 48, contentRight - valueWidth);
+
+            String label = parsedLine.label();
+            String icon =
+                    label.isEmpty()
+                            ? "S"
+                            : label.substring(0, 1).toUpperCase(java.util.Locale.ROOT);
+            int iconLeft = contentLeft;
+            int iconTop = rowY;
+            int iconWidth = 10;
+            int iconBottom = rowY + panel.lineHeight() - 1;
+            drawContext.fill(
+                    iconLeft, iconTop, iconLeft + iconWidth, iconBottom, withAlpha(0x2B5B44, 190));
+            drawContext.drawCenteredTextWithShadow(
+                    textRenderer, icon, iconLeft + (iconWidth / 2), rowY, 0xFFDEFFE9);
+
+            int labelX = iconLeft + iconWidth + 3;
+            int labelMaxWidth = Math.max(12, valueX - labelX - 3);
+            String labelText = textRenderer.trimToWidth(label, labelMaxWidth);
+            drawContext.drawTextWithShadow(textRenderer, labelText, labelX, rowY, 0xFFE5F4EA);
+            drawContext.drawTextWithShadow(textRenderer, valueText, valueX, rowY, 0xFF9EF0BC);
+
+            int barX = labelX;
+            int barY = rowY + panel.lineHeight() - 2;
+            int barWidth = Math.max(8, valueX - barX - 3);
+            drawContext.fill(barX, barY, barX + barWidth, barY + 1, withAlpha(0x33503F, 185));
+            int filled = Math.max(0, Math.min(barWidth, Math.round(barWidth * progress)));
+            if (filled > 0) {
+                drawContext.fill(barX, barY, barX + filled, barY + 1, withAlpha(0x66D89A, 235));
+            }
+
+            rowY += panel.lineHeight();
+        }
+    }
+
+    private static int widgetLineHeight(String widgetId) {
+        if (CompanionConfig.HUD_WIDGET_EVENTS_ID.equals(widgetId)) {
+            return 12;
+        }
+
+        if (CompanionConfig.HUD_WIDGET_COOLDOWNS_ID.equals(widgetId)) {
+            return 11;
+        }
+
+        return 10;
+    }
+
+    private static int basePanelWidth(String widgetId) {
+        if (CompanionConfig.HUD_WIDGET_EVENTS_ID.equals(widgetId)) {
+            return 184;
+        }
+
+        if (CompanionConfig.HUD_WIDGET_COOLDOWNS_ID.equals(widgetId)) {
+            return 166;
+        }
+
+        if (CompanionConfig.HUD_WIDGET_SATCHELS_ID.equals(widgetId)) {
+            return 158;
+        }
+
+        return 146;
+    }
+
+    private static int measureWidgetLineWidth(
+            String widgetId, List<String> lines, TextRenderer textRenderer) {
+        int max = 0;
+        for (String line : lines) {
+            HudWidgetCatalog.ParsedLine parsedLine = HudWidgetCatalog.splitLine(line);
+            if (CompanionConfig.HUD_WIDGET_EVENTS_ID.equals(widgetId)) {
+                int width =
+                        textRenderer.getWidth(compactEventLabel(parsedLine.label()))
+                                + textRenderer.getWidth(
+                                        compactStatusText(parsedLine.value(), false))
+                                + 32;
+                max = Math.max(max, width);
+                continue;
+            }
+
+            if (CompanionConfig.HUD_WIDGET_COOLDOWNS_ID.equals(widgetId)) {
+                int width =
+                        textRenderer.getWidth(compactCooldownLabel(parsedLine.label()))
+                                + textRenderer.getWidth(compactStatusText(parsedLine.value(), true))
+                                + 28;
+                max = Math.max(max, width);
+                continue;
+            }
+
+            if (CompanionConfig.HUD_WIDGET_SATCHELS_ID.equals(widgetId)) {
+                int width =
+                        textRenderer.getWidth(parsedLine.label())
+                                + textRenderer.getWidth(compactSatchelValue(parsedLine.value()))
+                                + 22;
+                max = Math.max(max, width);
+                continue;
+            }
+
+            max = Math.max(max, textRenderer.getWidth(line));
+        }
+
+        return max + (HUD_PANEL_HORIZONTAL_PADDING * 2);
+    }
+
+    private static void drawCircularMeter(
+            DrawContext drawContext,
+            int centerX,
+            int centerY,
+            int radius,
+            float progress,
+            int fillColor,
+            int trackColor) {
+        int segments = 28;
+        int filledSegments = Math.max(0, Math.min(segments, Math.round(progress * segments)));
+
+        for (int segment = 0; segment < segments; segment++) {
+            double angle = (-Math.PI / 2.0D) + ((Math.PI * 2.0D * segment) / segments);
+            int pixelX = centerX + (int) Math.round(Math.cos(angle) * radius);
+            int pixelY = centerY + (int) Math.round(Math.sin(angle) * radius);
+            int color = segment < filledSegments ? fillColor : trackColor;
+            drawContext.fill(pixelX, pixelY, pixelX + 1, pixelY + 1, color);
+        }
+
+        drawContext.fill(centerX, centerY, centerX + 1, centerY + 1, withAlpha(0xD8E7FF, 180));
+    }
+
+    private static float progressForRemaining(OptionalLong remaining, long referenceMaxSeconds) {
+        if (remaining.isEmpty()) {
+            return 0.0F;
+        }
+
+        long remainingSeconds = Math.max(0L, remaining.orElse(0L));
+        if (remainingSeconds <= 0L) {
+            return 1.0F;
+        }
+
+        long maxSeconds = Math.max(1L, referenceMaxSeconds);
+        if (maxSeconds <= 1L) {
+            return 0.0F;
+        }
+
+        double denominator = Math.log1p(maxSeconds);
+        if (denominator <= 0.0D) {
+            return 0.0F;
+        }
+
+        float progress =
+                (float) (1.0D - (Math.log1p(Math.min(remainingSeconds, maxSeconds)) / denominator));
+        return clamp01(progress);
+    }
+
+    private static int statusColor(String statusText, OptionalLong remaining) {
+        String normalized = normalizeStatusToken(statusText);
+
+        if ("now".equals(normalized) || "live".equals(normalized) || "active".equals(normalized)) {
+            return 0xFF7CF2A0;
+        }
+
+        if (isUnavailableStatus(normalized)) {
+            return 0xFF8A95AB;
+        }
+
+        if (remaining.isPresent() && remaining.orElse(0L) > 0L) {
+            long seconds = remaining.orElse(0L);
+            if (seconds <= 60L) {
+                return 0xFFFF7F80;
+            }
+            if (seconds <= 300L) {
+                return 0xFFFFB473;
+            }
+            if (seconds <= 1800L) {
+                return 0xFFF2D67A;
+            }
+            return 0xFF7CC6FF;
+        }
+
+        return 0xFFD8E3F4;
+    }
+
+    private static int eventAccentColor(String eventKey, int defaultAccent) {
+        return switch (eventKey) {
+            case CompanionConfig.HUD_EVENT_METEORITE -> 0xFFF4AB56;
+            case CompanionConfig.HUD_EVENT_METEOR -> 0xFFFF866A;
+            case CompanionConfig.HUD_EVENT_ALTAR_SPAWN -> 0xFFB689FF;
+            case CompanionConfig.HUD_EVENT_KOTH -> 0xFF7D99FF;
+            case CompanionConfig.HUD_EVENT_CREDIT_SHOP_RESET -> 0xFF5FD3CC;
+            case CompanionConfig.HUD_EVENT_JACKPOT -> 0xFFFFD56A;
+            case CompanionConfig.HUD_EVENT_FLASH_SALE -> 0xFFF48AB1;
+            case CompanionConfig.HUD_EVENT_MERCHANT -> 0xFF86D87A;
+            case CompanionConfig.HUD_EVENT_NEXT_REBOOT -> 0xFF62B5FF;
+            case CompanionConfig.HUD_EVENT_NEXT_LEVEL_CAP_UNLOCK -> 0xFFEFA86A;
+            default -> defaultAccent;
+        };
+    }
+
+    private static String compactEventLabel(String label) {
+        String normalized = normalizeStatusToken(label);
+        return switch (normalized) {
+            case "next level cap day unlock" -> "Lvl Cap Unlock";
+            case "credit shop reset" -> "Credit Reset";
+            case "altar spawn" -> "Altar";
+            case "next reboot" -> "Reboot";
+            default -> label;
+        };
+    }
+
+    private static String compactCooldownLabel(String label) {
+        if (label == null || label.isBlank()) {
+            return "Cooldown";
+        }
+        return label;
+    }
+
+    private static String compactSatchelValue(String value) {
+        String trimmed = value == null ? "" : value.trim();
+        if (trimmed.isEmpty()) {
+            return "--";
+        }
+        return trimmed;
+    }
+
+    private static String compactStatusText(String statusText, boolean cooldownMode) {
+        String trimmed = statusText == null ? "" : statusText.trim();
+        if (trimmed.isEmpty()) {
+            return "--";
+        }
+
+        String normalized = normalizeStatusToken(trimmed);
+        if (normalized.startsWith("check in ")) {
+            return trimmed.substring(9).trim();
+        }
+        if ("unavailable".equals(normalized)) {
+            return cooldownMode ? "--" : "N/A";
+        }
+        if ("not scheduled".equals(normalized)) {
+            return "No plan";
+        }
+        if ("max day".equals(normalized)) {
+            return "MAX";
+        }
+        if ("now".equals(normalized)) {
+            return "LIVE";
+        }
+        return trimmed;
+    }
+
+    private static float parseSatchelProgress(String valueText) {
+        if (valueText == null || valueText.isBlank()) {
+            return 0.0F;
+        }
+
+        String trimmed = valueText.trim();
+        int split = trimmed.indexOf(' ');
+        String ratio = split > 0 ? trimmed.substring(0, split) : trimmed;
+        int slashIndex = ratio.indexOf('/');
+        if (slashIndex <= 0 || slashIndex >= ratio.length() - 1) {
+            return 0.0F;
+        }
+
+        long stored = parseCompactAmount(ratio.substring(0, slashIndex));
+        long capacity = parseCompactAmount(ratio.substring(slashIndex + 1));
+        if (stored < 0L || capacity <= 0L) {
+            return 0.0F;
+        }
+
+        return clamp01((float) stored / (float) capacity);
+    }
+
+    private static long parseCompactAmount(String value) {
+        if (value == null || value.isBlank()) {
+            return -1L;
+        }
+
+        String trimmed = value.trim().toUpperCase(java.util.Locale.ROOT).replace(",", "");
+        if (trimmed.isEmpty()) {
+            return -1L;
+        }
+
+        long multiplier = 1L;
+        char suffix = trimmed.charAt(trimmed.length() - 1);
+        if (suffix == 'K' || suffix == 'M' || suffix == 'B' || suffix == 'T') {
+            trimmed = trimmed.substring(0, trimmed.length() - 1);
+            multiplier =
+                    switch (suffix) {
+                        case 'K' -> 1_000L;
+                        case 'M' -> 1_000_000L;
+                        case 'B' -> 1_000_000_000L;
+                        case 'T' -> 1_000_000_000_000L;
+                        default -> 1L;
+                    };
+        }
+
+        try {
+            double parsed = Double.parseDouble(trimmed);
+            if (parsed < 0.0D) {
+                return -1L;
+            }
+            return Math.round(parsed * multiplier);
+        } catch (NumberFormatException ignored) {
+            return -1L;
+        }
+    }
+
+    private static String normalizeStatusToken(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private static boolean isUnavailableStatus(String normalized) {
+        return "unavailable".equals(normalized)
+                || "not scheduled".equals(normalized)
+                || "max day".equals(normalized)
+                || "n/a".equals(normalized);
+    }
+
+    private static float clamp01(float value) {
+        return Math.max(0.0F, Math.min(1.0F, value));
     }
 
     private void processPingKeybinds(MinecraftClient client) {
@@ -1515,6 +1979,7 @@ public final class CompanionClientRuntime {
             int y,
             int width,
             int height,
+            int lineHeight,
             List<String> lines) {
         public HudWidgetPanel {
             lines = List.copyOf(lines);
