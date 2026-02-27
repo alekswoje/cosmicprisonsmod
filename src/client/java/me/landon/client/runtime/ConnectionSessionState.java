@@ -13,9 +13,17 @@ import me.landon.companion.protocol.ProtocolConstants;
 import me.landon.companion.protocol.ProtocolMessage;
 import me.landon.companion.session.ConnectionGateState;
 
+/**
+ * Mutable per-connection client state populated from server companion payloads.
+ *
+ * <p>This class is reset on disconnect and owns transient runtime data such as widget snapshots,
+ * item overlays, marker ids, and handshake tracking.
+ */
 public final class ConnectionSessionState {
+    /** Lightweight overlay snapshot for a single inventory slot. */
     public record ItemOverlayEntry(int overlayType, String displayText) {}
 
+    /** Snapshot of one HUD widget payload as received from the server. */
     public record HudWidgetEntry(List<String> lines, int ttlSeconds, long receivedAtEpochMillis) {
         public HudWidgetEntry {
             lines = List.copyOf(lines);
@@ -38,10 +46,12 @@ public final class ConnectionSessionState {
     private boolean hudWidgetsSupported;
     private boolean inventoryItemOverlaysSupported;
 
+    /** Returns the handshake gate state used to authorize companion message processing. */
     public ConnectionGateState gateState() {
         return gateState;
     }
 
+    /** Clears all handshake/session fields and payload snapshots for a new connection. */
     public void reset() {
         gateState.reset();
         clearInventoryItemOverlays();
@@ -58,6 +68,7 @@ public final class ConnectionSessionState {
         inventoryItemOverlaysSupported = false;
     }
 
+    /** Stores authoritative server hello metadata from the validated handshake frame. */
     public void setServerHello(ProtocolMessage.ServerHelloS2C hello) {
         serverId = hello.serverId();
         serverPluginVersion = hello.serverPluginVersion();
@@ -92,6 +103,11 @@ public final class ConnectionSessionState {
         return hudWidgetsSupported;
     }
 
+    /**
+     * Replaces the full inventory overlay snapshot with normalized slot mappings.
+     *
+     * <p>Invalid slots are ignored.
+     */
     public void replaceInventoryItemOverlays(List<ProtocolMessage.InventoryItemOverlay> overlays) {
         inventoryItemOverlays.clear();
 
@@ -113,6 +129,11 @@ public final class ConnectionSessionState {
         inventoryItemOverlays.clear();
     }
 
+    /**
+     * Replaces the full HUD widget snapshot.
+     *
+     * <p>Null widget ids and over-limit lines are discarded to preserve protocol bounds.
+     */
     public void replaceHudWidgets(List<ProtocolMessage.HudWidget> widgets) {
         hudWidgets.clear();
         long receivedAt = System.currentTimeMillis();
@@ -156,6 +177,7 @@ public final class ConnectionSessionState {
         return Collections.unmodifiableMap(new LinkedHashMap<>(hudWidgets));
     }
 
+    /** Applies an add/remove delta for peaceful-mining pass-through entity markers. */
     public void applyPeacefulMiningPassThroughDelta(
             List<Integer> addEntityIds, List<Integer> removeEntityIds) {
         for (int entityId : addEntityIds) {
@@ -187,11 +209,13 @@ public final class ConnectionSessionState {
         peacefulMiningPassThroughIds.clear();
     }
 
+    /** Applies an add/remove delta for gang ping beacon entities. */
     public void applyGangPingBeaconDelta(
             List<Integer> addEntityIds, List<Integer> removeEntityIds) {
         applyEntityIdDelta(gangPingBeaconIds, addEntityIds, removeEntityIds);
     }
 
+    /** Applies an add/remove delta for truce ping beacon entities. */
     public void applyTrucePingBeaconDelta(
             List<Integer> addEntityIds, List<Integer> removeEntityIds) {
         applyEntityIdDelta(trucePingBeaconIds, addEntityIds, removeEntityIds);
@@ -237,12 +261,16 @@ public final class ConnectionSessionState {
         this.malformedPacketLogged = true;
     }
 
+    /**
+     * Normalizes slot indexes into player storage space (0-35).
+     *
+     * <p>Supports legacy server payloads that send NMS hotbar slots (36-44).
+     */
     private static int normalizePlayerStorageSlot(int rawSlot) {
         if (rawSlot >= PLAYER_STORAGE_MIN_SLOT && rawSlot <= PLAYER_STORAGE_MAX_SLOT) {
             return rawSlot;
         }
 
-        // Compatibility path: some server implementations may send NMS hotbar slots 36-44.
         if (rawSlot >= 36 && rawSlot <= 44) {
             return rawSlot - 36;
         }

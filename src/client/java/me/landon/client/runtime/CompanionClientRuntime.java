@@ -5,6 +5,9 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -77,6 +80,13 @@ import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * Singleton client runtime that owns companion protocol handling, feature gating, and render state.
+ *
+ * <p>Contributors should treat this class as the main integration point for new server-driven
+ * client features. Register behavior through existing lifecycle hooks, gate by {@link
+ * ClientFeatures}, and persist user settings through {@link CompanionConfigManager}.
+ */
 public final class CompanionClientRuntime {
     private static final Logger LOGGER = LoggerFactory.getLogger(CompanionClientRuntime.class);
     private static final CompanionClientRuntime INSTANCE = new CompanionClientRuntime();
@@ -97,6 +107,20 @@ public final class CompanionClientRuntime {
             Pattern.compile("^#(\\d+)\\s+(.+?)\\s+-\\s+(.+)$");
     private static final Pattern LEADERBOARD_VALUE_PATTERN =
             Pattern.compile("(-?\\d+(?:\\.\\d+)?)\\s*([kKmMbBtT]?)");
+    private static final Pattern PROGRESS_RATIO_HINT_PATTERN =
+            Pattern.compile(
+                    "(?i)(?:^|\\|)\\s*progress\\s*=\\s*(-?\\d+(?:\\.\\d+)?)\\s*/\\s*(-?\\d+(?:\\.\\d+)?)\\s*(?:\\||$)");
+    private static final Pattern PROGRESS_PERCENT_HINT_PATTERN =
+            Pattern.compile(
+                    "(?i)(?:^|\\|)\\s*(?:p|progress)\\s*=\\s*(-?\\d+(?:\\.\\d+)?)\\s*%?\\s*(?:\\||$)");
+    private static final Pattern PROGRESS_ELAPSED_HINT_PATTERN =
+            Pattern.compile("(?i)(?:^|\\|)\\s*elapsed\\s*=\\s*([^|]+)");
+    private static final Pattern PROGRESS_TOTAL_HINT_PATTERN =
+            Pattern.compile("(?i)(?:^|\\|)\\s*total\\s*=\\s*([^|]+)");
+    private static final Pattern GANG_MEMBER_LINE_PATTERN =
+            Pattern.compile("^(\\[[^\\]]+\\])\\s+(?:(\\[[^\\]]+\\])\\s+)?(.+)$");
+    private static final Pattern GANG_TRAILING_TIME_PATTERN =
+            Pattern.compile("^(.*)\\(([^()]*)\\)\\s*$");
     private static final KeyBinding.Category PING_KEYBIND_CATEGORY =
             KeyBinding.Category.create(Identifier.of(CosmicPrisonsMod.MOD_ID, "pings"));
     private static final int PING_PARTICLE_COLUMN_SEGMENTS = 6;
@@ -109,6 +133,10 @@ public final class CompanionClientRuntime {
     private static final long UPDATE_CHECK_INTERVAL_MILLIS = 60_000L;
     private static final String MOD_RELEASE_MANIFEST_URL =
             "https://github.com/LandonDev/CosmicPrisonsMod/releases/latest/download/cosmic-launcher-manifest.json";
+    private static final String LAUNCHER_PROOF_PROPERTY = "cosmicprisons.launcher.proof";
+    private static final String LAUNCHER_PROOF_ENV = "COSMICPRISONS_LAUNCHER_PROOF";
+    private static final String LAUNCHER_PROOF_FILE_PROPERTY = "cosmicprisons.launcher.proofFile";
+    private static final int MAX_LAUNCHER_PROOF_BYTES = 1536;
     private static final Pattern MANIFEST_MOD_VERSION_PATTERN =
             Pattern.compile(
                     "\"mod\"\\s*:\\s*\\{[^{}]*\"version\"\\s*:\\s*\"([^\"]+)\"",
@@ -121,6 +149,7 @@ public final class CompanionClientRuntime {
     private final ConnectionSessionState session = new ConnectionSessionState();
     private final CompanionConfigManager configManager = new CompanionConfigManager();
     private final BuildAttestationLoader buildAttestationLoader = new BuildAttestationLoader();
+    private final LauncherProofProvider launcherProofProvider = new LauncherProofProvider();
     private final ModUpdateChecker modUpdateChecker =
             new ModUpdateChecker(this::resolveInstalledVersionForUpdateCheck);
     private final List<KnownOverlayStack> knownOverlayStacks = new ArrayList<>();
@@ -143,12 +172,18 @@ public final class CompanionClientRuntime {
     private boolean trucePingKeyWasDown;
     private boolean initialized;
 
+    /** Returns the global runtime instance used by all client integration points. */
     public static CompanionClientRuntime getInstance() {
         return INSTANCE;
     }
 
     private CompanionClientRuntime() {}
 
+    /**
+     * Initializes the runtime once and registers all client event listeners.
+     *
+     * <p>This must be called from the Fabric client entrypoint only.
+     */
     public synchronized void initializeClient() {
         if (initialized) {
             return;
@@ -177,14 +212,21 @@ public final class CompanionClientRuntime {
         return getConfig().enablePayloadCodecFallback;
     }
 
+    /** Returns the feature catalog used by settings and runtime gating logic. */
     public synchronized List<ClientFeatureDefinition> getAvailableFeatures() {
         return ClientFeatures.all();
     }
 
+    /** Returns whether a feature toggle is currently enabled in client config. */
     public synchronized boolean isFeatureEnabled(String featureId) {
         return getFeatureToggleState(featureId);
     }
 
+    /**
+     * Persists a feature toggle state.
+     *
+     * <p>Unknown ids are ignored.
+     */
     public synchronized void setFeatureEnabled(String featureId, boolean enabled) {
         if (ClientFeatures.findById(featureId).isEmpty()) {
             return;
@@ -196,16 +238,19 @@ public final class CompanionClientRuntime {
         config = currentConfig;
     }
 
+    /** Returns whether the connected server currently advertises support for the given feature. */
     public synchronized boolean isFeatureSupportedByServer(String featureId) {
         return ClientFeatures.findById(featureId)
                 .map(this::isFeatureSupportedByServer)
                 .orElse(false);
     }
 
+    /** Returns a snapshot of event visibility overrides used by the HUD event widget. */
     public synchronized Map<String, Boolean> getHudEventVisibilitySnapshot() {
         return new LinkedHashMap<>(getConfig().hudEventVisibility);
     }
 
+    /** Sets event visibility override for one event key. */
     public synchronized void setHudEventVisibility(String eventKey, boolean visible) {
         if (eventKey == null || eventKey.isBlank()) {
             return;
@@ -222,6 +267,7 @@ public final class CompanionClientRuntime {
         return getConfig().hudEventsCompactMode;
     }
 
+    /** Enables/disables compact rendering for the events widget. */
     public synchronized void setHudEventsCompactMode(boolean compactMode) {
         CompanionConfig currentConfig = getConfig();
         currentConfig.hudEventsCompactMode = compactMode;
@@ -233,6 +279,7 @@ public final class CompanionClientRuntime {
         return getConfig().hudSatchelsCompactMode;
     }
 
+    /** Enables/disables compact rendering for the satchels widget. */
     public synchronized void setHudSatchelsCompactMode(boolean compactMode) {
         CompanionConfig currentConfig = getConfig();
         currentConfig.hudSatchelsCompactMode = compactMode;
@@ -244,6 +291,7 @@ public final class CompanionClientRuntime {
         return new LinkedHashMap<>(getConfig().hudLeaderboardVisibility);
     }
 
+    /** Sets visibility override for one leaderboard widget id. */
     public synchronized void setHudLeaderboardVisibility(String widgetId, boolean visible) {
         if (widgetId == null || widgetId.isBlank()) {
             return;
@@ -264,6 +312,7 @@ public final class CompanionClientRuntime {
         return getConfig().hudLeaderboardsCompactMode;
     }
 
+    /** Enables/disables compact rendering for leaderboard widgets. */
     public synchronized void setHudLeaderboardsCompactMode(boolean compactMode) {
         CompanionConfig currentConfig = getConfig();
         currentConfig.hudLeaderboardsCompactMode = compactMode;
@@ -275,6 +324,7 @@ public final class CompanionClientRuntime {
         return getConfig().hudLeaderboardsCycleMode;
     }
 
+    /** Enables/disables rotating leaderboard cycle mode. */
     public synchronized void setHudLeaderboardsCycleMode(boolean cycleMode) {
         CompanionConfig currentConfig = getConfig();
         currentConfig.hudLeaderboardsCycleMode = cycleMode;
@@ -293,6 +343,7 @@ public final class CompanionClientRuntime {
         return snapshot;
     }
 
+    /** Returns persisted per-widget scale overrides (clamped to valid config bounds). */
     public synchronized Map<String, Double> getHudWidgetScales() {
         Map<String, Double> snapshot = new LinkedHashMap<>();
         for (Map.Entry<String, Double> entry : getConfig().hudWidgetScales.entrySet()) {
@@ -304,6 +355,7 @@ public final class CompanionClientRuntime {
         return snapshot;
     }
 
+    /** Returns persisted per-widget width multiplier overrides (clamped). */
     public synchronized Map<String, Double> getHudWidgetWidthMultipliers() {
         Map<String, Double> snapshot = new LinkedHashMap<>();
         for (Map.Entry<String, Double> entry : getConfig().hudWidgetWidthMultipliers.entrySet()) {
@@ -317,6 +369,11 @@ public final class CompanionClientRuntime {
         return snapshot;
     }
 
+    /**
+     * Returns one widget position.
+     *
+     * <p>When missing from config, default layout values are used.
+     */
     public synchronized CompanionConfig.HudWidgetPosition getHudWidgetPosition(String widgetId) {
         CompanionConfig.HudWidgetPosition configured =
                 getConfig().hudWidgetPositions.get(normalizeWidgetId(widgetId));
@@ -333,6 +390,7 @@ public final class CompanionClientRuntime {
         return new CompanionConfig.HudWidgetPosition(configured.x, configured.y);
     }
 
+    /** Returns one widget scale using config value or default fallback. */
     public synchronized double getHudWidgetScale(String widgetId) {
         String normalizedWidgetId = normalizeWidgetId(widgetId);
         Double configured = getConfig().hudWidgetScales.get(normalizedWidgetId);
@@ -348,6 +406,7 @@ public final class CompanionClientRuntime {
         return 1.0D;
     }
 
+    /** Returns one widget width multiplier using config value or default fallback. */
     public synchronized double getHudWidgetWidthMultiplier(String widgetId) {
         String normalizedWidgetId = normalizeWidgetId(widgetId);
         Double configured = getConfig().hudWidgetWidthMultipliers.get(normalizedWidgetId);
@@ -364,6 +423,7 @@ public final class CompanionClientRuntime {
         return 1.0D;
     }
 
+    /** Persists one widget position override using normalized (0-1) coordinates. */
     public synchronized void setHudWidgetPosition(
             String widgetId, double normalizedX, double normalizedY) {
         if (widgetId == null || widgetId.isBlank()) {
@@ -378,6 +438,7 @@ public final class CompanionClientRuntime {
         config = currentConfig;
     }
 
+    /** Persists one widget scale override. */
     public synchronized void setHudWidgetScale(String widgetId, double scale) {
         if (widgetId == null || widgetId.isBlank()) {
             return;
@@ -390,6 +451,7 @@ public final class CompanionClientRuntime {
         config = currentConfig;
     }
 
+    /** Persists one widget width multiplier override. */
     public synchronized void setHudWidgetWidthMultiplier(String widgetId, double widthMultiplier) {
         if (widgetId == null || widgetId.isBlank()) {
             return;
@@ -403,6 +465,7 @@ public final class CompanionClientRuntime {
         config = currentConfig;
     }
 
+    /** Restores widget layout/scale/width values to defaults. */
     public synchronized void resetHudLayout() {
         CompanionConfig defaults = CompanionConfig.defaults();
         CompanionConfig currentConfig = getConfig();
@@ -414,6 +477,7 @@ public final class CompanionClientRuntime {
         config = currentConfig;
     }
 
+    /** Returns the localized bind label for the gang ping keybind. */
     public synchronized Text gangPingKeybindLabel() {
         if (gangPingKeyBinding == null) {
             initializePingKeybinds();
@@ -422,6 +486,7 @@ public final class CompanionClientRuntime {
         return gangPingKeyBinding.getBoundKeyLocalizedText();
     }
 
+    /** Returns the localized bind label for the truce ping keybind. */
     public synchronized Text trucePingKeybindLabel() {
         if (trucePingKeyBinding == null) {
             initializePingKeybinds();
@@ -430,6 +495,7 @@ public final class CompanionClientRuntime {
         return trucePingKeyBinding.getBoundKeyLocalizedText();
     }
 
+    /** Binds a new key for gang pings and persists game options. */
     public synchronized void bindGangPingKey(KeyInput keyInput) {
         if (gangPingKeyBinding == null) {
             initializePingKeybinds();
@@ -438,6 +504,7 @@ public final class CompanionClientRuntime {
         bindKey(gangPingKeyBinding, keyInput);
     }
 
+    /** Binds a new key for truce pings and persists game options. */
     public synchronized void bindTrucePingKey(KeyInput keyInput) {
         if (trucePingKeyBinding == null) {
             initializePingKeybinds();
@@ -446,6 +513,7 @@ public final class CompanionClientRuntime {
         bindKey(trucePingKeyBinding, keyInput);
     }
 
+    /** Restores ping keybinds to their default keys and persists game options. */
     public synchronized void resetPingKeybindsToDefault() {
         if (gangPingKeyBinding == null || trucePingKeyBinding == null) {
             initializePingKeybinds();
@@ -457,6 +525,12 @@ public final class CompanionClientRuntime {
         persistGameOptions();
     }
 
+    /**
+     * Rewrites crosshair targeting when peaceful-mining pass-through applies to an entity.
+     *
+     * <p>This ensures mining interactions still target the underlying block instead of marker
+     * entities.
+     */
     public void onCrosshairTargetUpdated(MinecraftClient client, float tickDelta) {
         synchronized (this) {
             if (!shouldApplyPeacefulMiningPassThrough(client)) {
@@ -501,10 +575,12 @@ public final class CompanionClientRuntime {
         }
     }
 
+    /** Returns whether an entity should be rendered with peaceful-mining ghost visuals. */
     public boolean isPeacefulMiningGhostedEntity(int entityId) {
         return entityId >= 0 && entityId == activePeacefulMiningTargetEntityId;
     }
 
+    /** Renders a stack overlay for one handled-screen slot when overlay data is available. */
     public void renderHandledScreenSlotOverlay(DrawContext drawContext, Slot slot) {
         if (slot == null || !slot.hasStack()) {
             return;
@@ -529,6 +605,7 @@ public final class CompanionClientRuntime {
         drawOverlayText(drawContext, slot.x, slot.y, overlayEntry);
     }
 
+    /** Renders cursor-stack overlays in handled screens, with slot-click fallback support. */
     public void renderHandledScreenCursorOverlay(
             DrawContext drawContext,
             ScreenHandler handler,
@@ -588,6 +665,9 @@ public final class CompanionClientRuntime {
         drawOverlayText(drawContext, slotX, slotY, overlayEntry);
     }
 
+    /**
+     * Captures the most recent clicked-slot overlay to support cursor-drag rendering across frames.
+     */
     public synchronized void rememberHandledScreenSlotClickOverlay(Slot slot) {
         if (slot == null || !shouldRenderInventoryItemOverlays() || !slot.hasStack()) {
             return;
@@ -1099,6 +1179,11 @@ public final class CompanionClientRuntime {
         drawContext.drawTextWithShadow(textRenderer, lineTwo, textX, lineTwoY, 0xFFFFB6C1);
     }
 
+    /**
+     * Renders HUD panels in editor mode using optional transient overrides.
+     *
+     * <p>Overrides are not persisted; they are intended for live drag/scale preview workflows.
+     */
     public void renderHudWidgetPanelsForEditor(
             DrawContext drawContext,
             Map<String, CompanionConfig.HudWidgetPosition> positionOverrides,
@@ -1108,6 +1193,9 @@ public final class CompanionClientRuntime {
                 drawContext, true, positionOverrides, scaleOverrides, widthMultiplierOverrides);
     }
 
+    /**
+     * Convenience overload of {@link #renderHudWidgetPanelsForEditor(DrawContext, Map, Map, Map)}.
+     */
     public void renderHudWidgetPanelsForEditor(
             DrawContext drawContext,
             Map<String, CompanionConfig.HudWidgetPosition> positionOverrides,
@@ -1115,12 +1203,20 @@ public final class CompanionClientRuntime {
         renderHudWidgetPanelsForEditor(drawContext, positionOverrides, scaleOverrides, Map.of());
     }
 
+    /**
+     * Convenience overload of {@link #renderHudWidgetPanelsForEditor(DrawContext, Map, Map, Map)}.
+     */
     public void renderHudWidgetPanelsForEditor(
             DrawContext drawContext,
             Map<String, CompanionConfig.HudWidgetPosition> positionOverrides) {
         renderHudWidgetPanelsForEditor(drawContext, positionOverrides, Map.of());
     }
 
+    /**
+     * Collects computed HUD panel geometry for editor interactions.
+     *
+     * <p>Useful for hit-testing and drag constraints in custom editor UIs.
+     */
     public synchronized List<HudWidgetPanel> collectHudWidgetPanelsForEditor(
             int screenWidth,
             int screenHeight,
@@ -1136,6 +1232,9 @@ public final class CompanionClientRuntime {
                 widthMultiplierOverrides);
     }
 
+    /**
+     * Convenience overload of {@link #collectHudWidgetPanelsForEditor(int, int, Map, Map, Map)}.
+     */
     public synchronized List<HudWidgetPanel> collectHudWidgetPanelsForEditor(
             int screenWidth,
             int screenHeight,
@@ -1145,6 +1244,9 @@ public final class CompanionClientRuntime {
                 screenWidth, screenHeight, positionOverrides, scaleOverrides, Map.of());
     }
 
+    /**
+     * Convenience overload of {@link #collectHudWidgetPanelsForEditor(int, int, Map, Map, Map)}.
+     */
     public synchronized List<HudWidgetPanel> collectHudWidgetPanelsForEditor(
             int screenWidth,
             int screenHeight,
@@ -2086,15 +2188,14 @@ public final class CompanionClientRuntime {
         for (int index = 0; index < metadataRows; index++) {
             String metadataText = gangLayout.metadataLines().get(index);
             int rowY = contentTop + ((metadataStartRow + index) * lineHeight);
-            drawScaledGangMetadataLine(
+            renderGangMetadataLine(
                     drawContext,
                     textRenderer,
                     metadataText,
                     rowY,
                     lineHeight,
                     contentLeft,
-                    contentRight,
-                    0xFF9FB1C8);
+                    contentRight);
         }
     }
 
@@ -2284,7 +2385,7 @@ public final class CompanionClientRuntime {
         }
 
         if (CompanionConfig.HUD_WIDGET_GANG_ID.equals(widgetId)) {
-            return 11;
+            return 13;
         }
 
         if (CompanionConfig.HUD_WIDGET_LEADERBOARD_CYCLE_ID.equals(widgetId)
@@ -2450,7 +2551,7 @@ public final class CompanionClientRuntime {
     }
 
     private static int statusColor(String statusText, OptionalLong remaining) {
-        String normalized = normalizeStatusToken(statusText);
+        String normalized = normalizeStatusToken(primaryStatusSegment(statusText));
 
         if ("now".equals(normalized) || "live".equals(normalized) || "active".equals(normalized)) {
             return 0xFF7CF2A0;
@@ -2483,6 +2584,12 @@ public final class CompanionClientRuntime {
             return 0.0F;
         }
 
+        OptionalDouble explicitProgress = parseExplicitProgressHint(rawValue, remaining);
+        if (explicitProgress.isPresent()) {
+            eventProgressBaselineSeconds.remove(progressKey);
+            return clamp01((float) explicitProgress.orElse(0.0D));
+        }
+
         if (remaining.isEmpty()) {
             eventProgressBaselineSeconds.remove(progressKey);
             return 0.0F;
@@ -2496,7 +2603,6 @@ public final class CompanionClientRuntime {
 
         long baseline = eventProgressBaselineSeconds.getOrDefault(progressKey, remainingSeconds);
         if (remainingSeconds > baseline) {
-            // Event reset/new cycle; use the new remaining as the reference max.
             baseline = remainingSeconds;
         }
         eventProgressBaselineSeconds.put(progressKey, baseline);
@@ -2512,6 +2618,12 @@ public final class CompanionClientRuntime {
             String progressKey, String rawValue, OptionalLong remaining) {
         if (progressKey == null || progressKey.isBlank()) {
             return 0.0F;
+        }
+
+        OptionalDouble explicitProgress = parseExplicitProgressHint(rawValue, remaining);
+        if (explicitProgress.isPresent()) {
+            cooldownProgressBaselineSeconds.remove(progressKey);
+            return clamp01((float) explicitProgress.orElse(0.0D));
         }
 
         if (remaining.isEmpty()) {
@@ -2538,6 +2650,68 @@ public final class CompanionClientRuntime {
         return clamp01(1.0F - (remainingSeconds / (float) baseline));
     }
 
+    private static OptionalDouble parseExplicitProgressHint(
+            String rawValue, OptionalLong remaining) {
+        if (rawValue == null || rawValue.isBlank()) {
+            return OptionalDouble.empty();
+        }
+
+        Matcher ratioMatcher = PROGRESS_RATIO_HINT_PATTERN.matcher(rawValue);
+        if (ratioMatcher.find()) {
+            try {
+                double numerator = Double.parseDouble(ratioMatcher.group(1));
+                double denominator = Double.parseDouble(ratioMatcher.group(2));
+                if (denominator > 0.0D) {
+                    return OptionalDouble.of(clamp01((float) (numerator / denominator)));
+                }
+            } catch (NumberFormatException ignored) {
+                // fall through to other hint types
+            }
+        }
+
+        Matcher percentMatcher = PROGRESS_PERCENT_HINT_PATTERN.matcher(rawValue);
+        if (percentMatcher.find()) {
+            try {
+                double rawPercent = Double.parseDouble(percentMatcher.group(1));
+                String matchedToken = percentMatcher.group(0);
+                boolean markedAsPercent = matchedToken != null && matchedToken.contains("%");
+                double normalized =
+                        (markedAsPercent || rawPercent > 1.0D) ? (rawPercent / 100.0D) : rawPercent;
+                return OptionalDouble.of(clamp01((float) normalized));
+            } catch (NumberFormatException ignored) {
+                // fall through to duration hints
+            }
+        }
+
+        OptionalLong totalSeconds =
+                parseProgressDurationHint(rawValue, PROGRESS_TOTAL_HINT_PATTERN);
+        if (totalSeconds.isPresent() && totalSeconds.orElse(0L) > 0L) {
+            OptionalLong elapsedSeconds =
+                    parseProgressDurationHint(rawValue, PROGRESS_ELAPSED_HINT_PATTERN);
+            if (elapsedSeconds.isPresent()) {
+                return OptionalDouble.of(
+                        clamp01(
+                                (float)
+                                        (elapsedSeconds.orElse(0L)
+                                                / (double) totalSeconds.orElse(1L))));
+            }
+            if (remaining.isPresent()) {
+                double ratio = 1.0D - (remaining.orElse(0L) / (double) totalSeconds.orElse(1L));
+                return OptionalDouble.of(clamp01((float) ratio));
+            }
+        }
+
+        return OptionalDouble.empty();
+    }
+
+    private static OptionalLong parseProgressDurationHint(String rawValue, Pattern hintPattern) {
+        Matcher matcher = hintPattern.matcher(rawValue);
+        if (!matcher.find()) {
+            return OptionalLong.empty();
+        }
+        return HudWidgetCatalog.parseDurationSeconds(matcher.group(1));
+    }
+
     private static String normalizeEventProgressKey(String value) {
         if (value == null || value.isBlank()) {
             return "";
@@ -2554,7 +2728,6 @@ public final class CompanionClientRuntime {
 
     private static int eventAccentColor(String eventKey, int defaultAccent) {
         return switch (eventKey) {
-            case CompanionConfig.HUD_EVENT_METEORITE -> 0xFFF4AB56;
             case CompanionConfig.HUD_EVENT_METEOR -> 0xFFFF866A;
             case CompanionConfig.HUD_EVENT_ALTAR_SPAWN -> 0xFFB689FF;
             case CompanionConfig.HUD_EVENT_KOTH -> 0xFF7D99FF;
@@ -2570,7 +2743,6 @@ public final class CompanionClientRuntime {
 
     private static Item eventIcon(String eventKey) {
         return switch (eventKey) {
-            case CompanionConfig.HUD_EVENT_METEORITE -> Items.MAGMA_BLOCK;
             case CompanionConfig.HUD_EVENT_METEOR -> Items.FIRE_CHARGE;
             case CompanionConfig.HUD_EVENT_ALTAR_SPAWN -> Items.ENCHANTING_TABLE;
             case CompanionConfig.HUD_EVENT_KOTH -> Items.NETHER_STAR;
@@ -2682,7 +2854,9 @@ public final class CompanionClientRuntime {
         }
 
         if (onlineIndex < 0 && offlineIndex < 0) {
-            metadata.addAll(cleaned);
+            for (String line : cleaned) {
+                appendGangMetadataLines(metadata, line);
+            }
             return new GangLayout(primary, metadata);
         }
 
@@ -2698,10 +2872,83 @@ public final class CompanionClientRuntime {
                 primary.add(new GangPrimaryLine(line, -1, header));
                 continue;
             }
-            metadata.add(line);
+            appendGangMetadataLines(metadata, line);
         }
 
         return new GangLayout(primary, metadata);
+    }
+
+    private static void appendGangMetadataLines(List<String> metadata, String rawLine) {
+        if (rawLine == null || rawLine.isBlank()) {
+            return;
+        }
+
+        String line = rawLine.trim();
+        String normalizedLine = normalizeStatusToken(line);
+
+        if (line.contains("|") && normalizedLine.contains("truce")) {
+            String membersSegment = "";
+            String truceSegment = "";
+            String[] segments = line.split("\\|");
+            for (String rawSegment : segments) {
+                String segment = rawSegment == null ? "" : rawSegment.trim();
+                if (segment.isBlank()) {
+                    continue;
+                }
+                String normalizedSegment = normalizeStatusToken(segment);
+                if (normalizedSegment.startsWith("member")) {
+                    membersSegment = segment;
+                } else if (normalizedSegment.startsWith("truce")) {
+                    truceSegment = segment;
+                }
+            }
+
+            String preferredTruce = preferredGangTruce(truceSegment);
+            if (!preferredTruce.isBlank()) {
+                metadata.add("Truce: " + preferredTruce);
+                return;
+            }
+            if (!membersSegment.isBlank()) {
+                metadata.add(membersSegment);
+                return;
+            }
+        }
+
+        if (normalizedLine.startsWith("truce")) {
+            String preferredTruce = preferredGangTruce(line);
+            if (!preferredTruce.isBlank()) {
+                metadata.add("Truce: " + preferredTruce);
+            }
+            return;
+        }
+
+        metadata.add(line);
+    }
+
+    private static String preferredGangTruce(String line) {
+        if (line == null || line.isBlank()) {
+            return "";
+        }
+
+        int colonIndex = line.indexOf(':');
+        String value = colonIndex >= 0 ? line.substring(colonIndex + 1).trim() : line.trim();
+        if (value.isBlank()) {
+            return "";
+        }
+
+        String normalized = normalizeStatusToken(value);
+        if (normalized.isBlank()
+                || normalized.equals("none")
+                || normalized.equals("n/a")
+                || normalized.equals("na")
+                || normalized.equals("0")
+                || normalized.matches("\\d+")) {
+            return "";
+        }
+
+        String[] tokens = value.split("[,/|]");
+        String first = tokens.length == 0 ? value : tokens[0];
+        return first.trim();
     }
 
     private static void renderGangPrimaryLine(
@@ -2716,15 +2963,14 @@ public final class CompanionClientRuntime {
         if (text.isBlank()) {
             return;
         }
-
-        int textMaxWidth = Math.max(8, contentRight - contentLeft - (line.header() ? 1 : 8));
-        String display = textRenderer.trimToWidth(text, textMaxWidth);
-        int textY = rowY + 1;
-        int textX = contentLeft + (line.header() ? 0 : 6);
+        int textY = rowY + 2;
+        int textX = contentLeft + (line.header() ? 1 : 3);
 
         if (line.header()) {
             int headerColor = line.section() > 0 ? 0x1F4A33 : 0x2E3848;
             int headerText = line.section() > 0 ? 0xFFA7F1C2 : 0xFFC6D3E7;
+            int textMaxWidth = Math.max(8, contentRight - textX - 1);
+            String display = textRenderer.trimToWidth(text, textMaxWidth);
             drawContext.fill(
                     contentLeft,
                     rowY + 1,
@@ -2735,9 +2981,181 @@ public final class CompanionClientRuntime {
             return;
         }
 
+        String mainText = text;
+        String suffixText = "";
+        Matcher trailingMatcher = GANG_TRAILING_TIME_PATTERN.matcher(mainText);
+        if (line.section() > 0 && trailingMatcher.matches()) {
+            mainText = trailingMatcher.group(1).trim();
+            suffixText = trailingMatcher.group(2).trim();
+        }
+
+        int contentMaxRight = contentRight - 1;
+        if (!suffixText.isBlank()) {
+            String suffixDisplay = textRenderer.trimToWidth("(" + suffixText + ")", 48);
+            int suffixWidth = textRenderer.getWidth(suffixDisplay);
+            if (suffixWidth + 24 <= (contentRight - textX)) {
+                int suffixX = contentRight - suffixWidth;
+                drawContext.drawTextWithShadow(
+                        textRenderer, suffixDisplay, suffixX, textY, 0xFFA6B8CF);
+                contentMaxRight = suffixX - 3;
+            }
+        }
+
+        int textMaxWidth = Math.max(8, contentMaxRight - textX);
         int textColor =
                 line.section() > 0 ? 0xFFDDF8E7 : line.section() < 0 ? 0xFFBCC8D8 : 0xFFE4ECF8;
-        drawContext.drawTextWithShadow(textRenderer, display, textX, textY, textColor);
+        Matcher memberMatcher = GANG_MEMBER_LINE_PATTERN.matcher(mainText);
+        if (!memberMatcher.matches()) {
+            String display = textRenderer.trimToWidth(mainText, textMaxWidth);
+            drawContext.drawTextWithShadow(textRenderer, display, textX, textY, textColor);
+            return;
+        }
+
+        String rankToken = memberMatcher.group(1);
+        String gangTagToken = memberMatcher.group(2);
+        String nameToken = memberMatcher.group(3) == null ? "" : memberMatcher.group(3).trim();
+        int drawX = textX;
+
+        String rankDisplay = textRenderer.trimToWidth(rankToken, Math.max(8, textMaxWidth));
+        drawContext.drawTextWithShadow(
+                textRenderer,
+                rankDisplay,
+                drawX,
+                textY,
+                line.section() > 0 ? 0xFF9DE9C0 : 0xFF9FB5D0);
+        drawX += textRenderer.getWidth(rankDisplay) + 2;
+
+        if (gangTagToken != null && !gangTagToken.isBlank() && drawX < contentMaxRight - 6) {
+            int tagWidth =
+                    Math.min(textRenderer.getWidth(gangTagToken), contentMaxRight - drawX - 4);
+            if (tagWidth > 0) {
+                String tagDisplay = textRenderer.trimToWidth(gangTagToken, tagWidth);
+                drawContext.drawTextWithShadow(textRenderer, tagDisplay, drawX, textY, 0xFF7FCBFF);
+                drawX += textRenderer.getWidth(tagDisplay) + 2;
+            }
+        }
+
+        int nameWidth = Math.max(8, contentMaxRight - drawX);
+        String nameDisplay = textRenderer.trimToWidth(nameToken, nameWidth);
+        drawContext.drawTextWithShadow(textRenderer, nameDisplay, drawX, textY, textColor);
+    }
+
+    private static void renderGangMetadataLine(
+            DrawContext drawContext,
+            TextRenderer textRenderer,
+            String rawText,
+            int rowY,
+            int rowHeight,
+            int contentLeft,
+            int contentRight) {
+        if (rawText == null || rawText.isBlank()) {
+            return;
+        }
+
+        if (renderGangPointsBankLine(
+                drawContext, textRenderer, rawText, rowY, rowHeight, contentLeft, contentRight)) {
+            return;
+        }
+
+        int color = 0xFF9FB1C8;
+        String normalized = normalizeStatusToken(rawText);
+        if (normalized.startsWith("truce")) {
+            color = 0xFFB9D9FF;
+        } else if (normalized.startsWith("target")) {
+            color = 0xFFE3C7B0;
+        }
+
+        drawScaledGangMetadataLine(
+                drawContext,
+                textRenderer,
+                rawText,
+                rowY,
+                rowHeight,
+                contentLeft,
+                contentRight,
+                color);
+    }
+
+    private static boolean renderGangPointsBankLine(
+            DrawContext drawContext,
+            TextRenderer textRenderer,
+            String rawText,
+            int rowY,
+            int rowHeight,
+            int contentLeft,
+            int contentRight) {
+        String lowered = rawText.toLowerCase(java.util.Locale.ROOT);
+        int pointsIndex = lowered.indexOf("points:");
+        int bankIndex = lowered.indexOf("bank:");
+        if (pointsIndex < 0 || bankIndex < 0) {
+            return false;
+        }
+
+        String pointsValue = "";
+        String bankValue = "";
+        if (pointsIndex < bankIndex) {
+            pointsValue =
+                    rawText.substring(pointsIndex + "points:".length(), bankIndex)
+                            .replace("|", "")
+                            .trim();
+            bankValue = rawText.substring(bankIndex + "bank:".length()).replace("|", "").trim();
+        } else {
+            bankValue =
+                    rawText.substring(bankIndex + "bank:".length(), pointsIndex)
+                            .replace("|", "")
+                            .trim();
+            pointsValue =
+                    rawText.substring(pointsIndex + "points:".length()).replace("|", "").trim();
+        }
+
+        if (pointsValue.isBlank() && bankValue.isBlank()) {
+            return false;
+        }
+
+        int gap = 4;
+        int totalWidth = Math.max(16, contentRight - contentLeft);
+        int segmentWidth = Math.max(40, (totalWidth - gap) / 2);
+        int leftSegmentX = contentLeft;
+        int rightSegmentX = contentRight - segmentWidth;
+        int rowTop = rowY + 1;
+        int rowBottom = rowY + rowHeight - 1;
+
+        drawContext.fill(
+                leftSegmentX,
+                rowTop,
+                leftSegmentX + segmentWidth,
+                rowBottom,
+                withAlpha(0x35522F, 150));
+        drawContext.fill(
+                rightSegmentX,
+                rowTop,
+                rightSegmentX + segmentWidth,
+                rowBottom,
+                withAlpha(0x584732, 150));
+
+        drawMiniItem(drawContext, Items.NETHER_STAR, leftSegmentX + 2, rowY + 2);
+        drawMiniItem(drawContext, Items.GOLD_INGOT, rightSegmentX + 2, rowY + 2);
+
+        String leftText =
+                textRenderer.trimToWidth("Pts " + pointsValue, Math.max(8, segmentWidth - 12));
+        String rightText =
+                textRenderer.trimToWidth("Bank " + bankValue, Math.max(8, segmentWidth - 12));
+        drawContext.drawTextWithShadow(
+                textRenderer, leftText, leftSegmentX + 10, rowY + 2, 0xFFD6F4C8);
+        drawContext.drawTextWithShadow(
+                textRenderer, rightText, rightSegmentX + 10, rowY + 2, 0xFFF7D8A8);
+        return true;
+    }
+
+    private static void drawMiniItem(DrawContext drawContext, Item item, int x, int y) {
+        if (item == null) {
+            return;
+        }
+        drawContext.getMatrices().pushMatrix();
+        drawContext.getMatrices().translate(x, y);
+        drawContext.getMatrices().scale(0.5F, 0.5F);
+        drawContext.drawItem(item.getDefaultStack(), 0, 0);
+        drawContext.getMatrices().popMatrix();
     }
 
     private static void drawScaledGangMetadataLine(
@@ -2980,7 +3398,7 @@ public final class CompanionClientRuntime {
     }
 
     private static String compactStatusText(String statusText, boolean cooldownMode) {
-        String trimmed = statusText == null ? "" : statusText.trim();
+        String trimmed = primaryStatusSegment(statusText);
         if (trimmed.isEmpty()) {
             return "--";
         }
@@ -3100,6 +3518,15 @@ public final class CompanionClientRuntime {
             return "";
         }
         return value.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private static String primaryStatusSegment(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        int metadataSeparator = value.indexOf('|');
+        String primary = metadataSeparator >= 0 ? value.substring(0, metadataSeparator) : value;
+        return primary.trim();
     }
 
     private static boolean isUnavailableStatus(String normalized) {
@@ -3318,9 +3745,11 @@ public final class CompanionClientRuntime {
         }
 
         helloUnavailableLogged = false;
+        String clientVersionPayload =
+                launcherProofProvider.applyTo(buildAttestation.asStructuredClientVersion());
         ProtocolMessage.ClientHelloC2S hello =
                 new ProtocolMessage.ClientHelloC2S(
-                        buildAttestation.asStructuredClientVersion(), CLIENT_CAPABILITIES_BITSET);
+                        clientVersionPayload, CLIENT_CAPABILITIES_BITSET);
         sendC2S(hello);
         session.markHelloSent();
     }
@@ -3623,6 +4052,102 @@ public final class CompanionClientRuntime {
         }
     }
 
+    private static final class LauncherProofProvider {
+        private volatile String cachedProof = "";
+        private volatile boolean loaded;
+
+        private String applyTo(String structuredVersion) {
+            String proof = resolveProof();
+            if (proof.isBlank()) {
+                return structuredVersion;
+            }
+
+            return structuredVersion + ";proof=" + proof;
+        }
+
+        private String resolveProof() {
+            if (loaded) {
+                return cachedProof;
+            }
+
+            synchronized (this) {
+                if (loaded) {
+                    return cachedProof;
+                }
+
+                String proof = sanitizeProof(readProofFromPropertyOrEnv());
+                if (proof.isBlank()) {
+                    proof = sanitizeProof(readProofFromFileProperty());
+                }
+
+                cachedProof = proof;
+                loaded = true;
+                if (!proof.isBlank()) {
+                    LOGGER.info("Launcher proof token attached to ClientHello");
+                }
+                return cachedProof;
+            }
+        }
+
+        private static String readProofFromPropertyOrEnv() {
+            String property = System.getProperty(LAUNCHER_PROOF_PROPERTY, "");
+            if (!property.isBlank()) {
+                return property;
+            }
+
+            String env = System.getenv(LAUNCHER_PROOF_ENV);
+            return env == null ? "" : env;
+        }
+
+        private static String readProofFromFileProperty() {
+            String filePath = System.getProperty(LAUNCHER_PROOF_FILE_PROPERTY, "");
+            if (filePath.isBlank()) {
+                return "";
+            }
+
+            try {
+                Path path = Path.of(filePath).normalize();
+                if (!Files.isRegularFile(path)) {
+                    return "";
+                }
+
+                String token = Files.readString(path, StandardCharsets.UTF_8).trim();
+                try {
+                    Files.delete(path);
+                } catch (Exception ex) {
+                    LOGGER.debug("Failed to delete launcher proof file: {}", ex.getMessage());
+                }
+                return token;
+            } catch (Exception ex) {
+                LOGGER.debug("Failed to read launcher proof file: {}", ex.getMessage());
+                return "";
+            }
+        }
+
+        private static String sanitizeProof(String rawProof) {
+            if (rawProof == null) {
+                return "";
+            }
+
+            String trimmed = rawProof.trim();
+            if (trimmed.isEmpty()) {
+                return "";
+            }
+
+            if (trimmed.indexOf(';') >= 0
+                    || trimmed.indexOf('\n') >= 0
+                    || trimmed.indexOf('\r') >= 0) {
+                return "";
+            }
+
+            if (trimmed.getBytes(StandardCharsets.UTF_8).length > MAX_LAUNCHER_PROOF_BYTES) {
+                return "";
+            }
+
+            return trimmed;
+        }
+    }
+
     private String resolveInstalledVersionForUpdateCheck() {
         BuildAttestation attestation = buildAttestation;
         if (attestation != null) {
@@ -3833,6 +4358,7 @@ public final class CompanionClientRuntime {
 
     private record LeaderboardEntry(int rank, String name, String value) {}
 
+    /** Immutable geometry snapshot for a renderable HUD widget panel. */
     public record HudWidgetPanel(
             String widgetId,
             String titleTranslationKey,
@@ -3853,10 +4379,12 @@ public final class CompanionClientRuntime {
             lines = List.copyOf(lines);
         }
 
+        /** Returns panel width in actual rendered pixels after scale is applied. */
         public int physicalWidth() {
             return Math.max(1, Math.round(width * scale));
         }
 
+        /** Returns panel height in actual rendered pixels after scale is applied. */
         public int physicalHeight() {
             return Math.max(1, Math.round(height * scale));
         }

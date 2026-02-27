@@ -13,7 +13,14 @@ import java.util.regex.Pattern;
 import me.landon.client.feature.ClientFeatures;
 import me.landon.companion.config.CompanionConfig;
 
+/**
+ * Static catalog and parsing helpers for server-driven HUD widgets/events.
+ *
+ * <p>Use this class as the single source of widget ids, preview metadata, and line parsing rules
+ * when implementing new HUD feature behavior.
+ */
 public final class HudWidgetCatalog {
+    /** Metadata describing one HUD widget family. */
     public record WidgetDescriptor(
             String widgetId,
             String featureId,
@@ -21,9 +28,12 @@ public final class HudWidgetCatalog {
             int accentColor,
             List<String> previewLines) {}
 
+    /** Metadata describing a known event key/label pair. */
     public record EventDescriptor(String key, String label, String iconTag) {}
 
+    /** Parsed representation of a common "Label: Value" status line. */
     public record ParsedLine(String label, String value) {
+        /** Rebuilds this parsed line as display text. */
         public String asText() {
             if (value.isEmpty()) {
                 return label;
@@ -155,7 +165,6 @@ public final class HudWidgetCatalog {
 
     private static final List<EventDescriptor> EVENTS_CATALOG =
             List.of(
-                    new EventDescriptor(CompanionConfig.HUD_EVENT_METEORITE, "Meteorite", "MTR"),
                     new EventDescriptor(CompanionConfig.HUD_EVENT_METEOR, "Meteor", "MET"),
                     new EventDescriptor(
                             CompanionConfig.HUD_EVENT_ALTAR_SPAWN, "Altar Spawn", "ALT"),
@@ -181,10 +190,12 @@ public final class HudWidgetCatalog {
 
     private HudWidgetCatalog() {}
 
+    /** Returns all known HUD widget descriptors in deterministic render/settings order. */
     public static List<WidgetDescriptor> widgets() {
         return WIDGETS;
     }
 
+    /** Resolves any widget descriptor by id (case-insensitive). */
     public static Optional<WidgetDescriptor> findWidget(String widgetId) {
         if (widgetId == null) {
             return Optional.empty();
@@ -192,10 +203,12 @@ public final class HudWidgetCatalog {
         return Optional.ofNullable(WIDGETS_BY_ID.get(normalizeToken(widgetId)));
     }
 
+    /** Returns leaderboard widget descriptors (excluding the rotating synthetic entry). */
     public static List<WidgetDescriptor> leaderboardWidgets() {
         return LEADERBOARDS;
     }
 
+    /** Resolves a leaderboard widget descriptor by id (case-insensitive). */
     public static Optional<WidgetDescriptor> findLeaderboardWidget(String widgetId) {
         if (widgetId == null) {
             return Optional.empty();
@@ -208,23 +221,28 @@ public final class HudWidgetCatalog {
         return Optional.empty();
     }
 
+    /** Returns the rotating leaderboard descriptor used for cycle mode rendering. */
     public static WidgetDescriptor leaderboardCycleWidget() {
         return LEADERBOARD_CYCLE;
     }
 
+    /** Returns whether a widget id belongs to any leaderboard widget. */
     public static boolean isLeaderboardWidget(String widgetId) {
         return findLeaderboardWidget(widgetId).isPresent();
     }
 
+    /** Returns whether a widget id is the rotating leaderboard widget id. */
     public static boolean isLeaderboardCycleWidget(String widgetId) {
         return normalizeToken(CompanionConfig.HUD_WIDGET_LEADERBOARD_CYCLE_ID)
                 .equals(normalizeToken(widgetId));
     }
 
+    /** Returns all known event descriptors used by event HUD rendering/sorting. */
     public static List<EventDescriptor> eventDescriptors() {
         return EVENTS_CATALOG;
     }
 
+    /** Resolves an event descriptor by canonical event key. */
     public static Optional<EventDescriptor> findEventByKey(String key) {
         if (key == null) {
             return Optional.empty();
@@ -232,6 +250,7 @@ public final class HudWidgetCatalog {
         return Optional.ofNullable(EVENT_BY_KEY.get(normalizeToken(key)));
     }
 
+    /** Resolves an event descriptor by display label. */
     public static Optional<EventDescriptor> findEventByLabel(String label) {
         if (label == null) {
             return Optional.empty();
@@ -239,6 +258,7 @@ public final class HudWidgetCatalog {
         return Optional.ofNullable(EVENT_BY_LABEL.get(normalizeToken(label)));
     }
 
+    /** Splits a raw line into label/value using the first ':' separator. */
     public static ParsedLine splitLine(String line) {
         if (line == null) {
             return new ParsedLine("", "");
@@ -256,6 +276,11 @@ public final class HudWidgetCatalog {
         return new ParsedLine(label, value);
     }
 
+    /**
+     * Parses and sorts event rows by soonest duration first.
+     *
+     * <p>Unknown lines are appended after known/sorted events, preserving their original order.
+     */
     public static List<ParsedLine> sortEventsClosestFirst(
             List<String> rawLines, Map<String, Boolean> visibilityByEventKey) {
         List<ParsedEventLine> known = new ArrayList<>();
@@ -263,6 +288,9 @@ public final class HudWidgetCatalog {
 
         for (int index = 0; index < rawLines.size(); index++) {
             ParsedLine parsedLine = splitLine(rawLines.get(index));
+            if ("meteorite".equals(normalizeToken(parsedLine.label()))) {
+                continue;
+            }
             Optional<EventDescriptor> eventDescriptor = findEventByLabel(parsedLine.label());
 
             if (eventDescriptor.isPresent()) {
@@ -291,9 +319,10 @@ public final class HudWidgetCatalog {
         return sorted;
     }
 
+    /** Returns whether a cooldown line should be treated as active/armed. */
     public static boolean isCooldownLineActive(String rawLine) {
         ParsedLine parsedLine = splitLine(rawLine);
-        String status = normalizeToken(parsedLine.value());
+        String status = normalizeToken(primaryStatusSegment(parsedLine.value()));
 
         if (status.isEmpty()) {
             return !normalizeToken(parsedLine.label()).isEmpty();
@@ -307,12 +336,17 @@ public final class HudWidgetCatalog {
         return !isInactiveStatus(status);
     }
 
+    /**
+     * Attempts to parse a duration string into total seconds.
+     *
+     * @return Parsed seconds or empty when no duration token is present.
+     */
     public static OptionalLong parseDurationSeconds(String statusText) {
         if (statusText == null) {
             return OptionalLong.empty();
         }
 
-        String normalized = normalizeToken(statusText);
+        String normalized = normalizeToken(primaryStatusSegment(statusText));
         if (normalized.isEmpty()) {
             return OptionalLong.empty();
         }
@@ -416,6 +450,15 @@ public final class HudWidgetCatalog {
             return "";
         }
         return value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static String primaryStatusSegment(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        int metadataSeparator = value.indexOf('|');
+        String primary = metadataSeparator >= 0 ? value.substring(0, metadataSeparator) : value;
+        return primary.trim();
     }
 
     private static Map<String, WidgetDescriptor> buildWidgetsById(List<WidgetDescriptor> widgets) {

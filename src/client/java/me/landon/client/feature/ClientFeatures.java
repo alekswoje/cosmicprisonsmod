@@ -5,6 +5,12 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import me.landon.companion.protocol.ProtocolConstants;
 
+/**
+ * Central catalog of client features.
+ *
+ * <p>To add a new feature, register a {@link ClientFeatureDefinition} constant and include it in
+ * {@link #ALL}. The runtime and settings UI consume this catalog dynamically.
+ */
 public final class ClientFeatures {
     public static final String PEACEFUL_MINING_ID = "peaceful_mining";
     public static final ClientFeatureDefinition PEACEFUL_MINING =
@@ -99,10 +105,21 @@ public final class ClientFeatures {
 
     private ClientFeatures() {}
 
+    /**
+     * Returns all known feature definitions in deterministic UI/render order.
+     *
+     * @return Immutable feature list used by runtime and settings screens.
+     */
     public static List<ClientFeatureDefinition> all() {
         return ALL;
     }
 
+    /**
+     * Resolves a feature by id.
+     *
+     * @param id Stable feature id from config or protocol-driven logic.
+     * @return Matching feature definition, or empty when unknown.
+     */
     public static Optional<ClientFeatureDefinition> findById(String id) {
         return ALL.stream().filter(feature -> feature.id().equals(id)).findFirst();
     }

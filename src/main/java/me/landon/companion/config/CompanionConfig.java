@@ -20,7 +20,6 @@ public final class CompanionConfig {
     public static final String HUD_WIDGET_LEADERBOARD_BLOCKS_ID = "leaderboard_blocks";
     public static final String HUD_WIDGET_LEADERBOARD_LEVEL_ID = "leaderboard_level";
     public static final String HUD_WIDGET_LEADERBOARD_CYCLE_ID = "leaderboard_cycle";
-    public static final String HUD_EVENT_METEORITE = "meteorite";
     public static final String HUD_EVENT_METEOR = "meteor";
     public static final String HUD_EVENT_ALTAR_SPAWN = "altar_spawn";
     public static final String HUD_EVENT_KOTH = "koth";
@@ -32,7 +31,6 @@ public final class CompanionConfig {
     public static final String HUD_EVENT_NEXT_LEVEL_CAP_UNLOCK = "next_level_cap_day_unlock";
     public static final List<String> HUD_EVENT_KEYS =
             List.of(
-                    HUD_EVENT_METEORITE,
                     HUD_EVENT_METEOR,
                     HUD_EVENT_ALTAR_SPAWN,
                     HUD_EVENT_KOTH,
@@ -77,7 +75,6 @@ public final class CompanionConfig {
     public Map<String, Boolean> hudEventVisibility = new LinkedHashMap<>();
     public Map<String, Boolean> hudLeaderboardVisibility = new LinkedHashMap<>();
     public String serverSignaturePolicy = SIGNATURE_POLICY_LOG_ONLY;
-    // Legacy field retained for config compatibility.
     public boolean requireServerSignature;
     public List<String> serverSignaturePublicKeys = new ArrayList<>();
     public boolean logMalformedOncePerConnection = true;
@@ -132,11 +129,9 @@ public final class CompanionConfig {
             hudLeaderboardVisibility = new LinkedHashMap<>();
         }
 
-        // Official policy: only the production domain is allowed.
         allowedServerIds = List.of(OFFICIAL_ALLOWED_SERVER_ID);
 
         if (serverSignaturePolicy == null || serverSignaturePolicy.isBlank()) {
-            // Fall back to LOG_ONLY when the new policy field is missing.
             serverSignaturePolicy = SIGNATURE_POLICY_LOG_ONLY;
         } else {
             serverSignaturePolicy = serverSignaturePolicy.trim().toUpperCase(Locale.ROOT);
@@ -287,22 +282,15 @@ public final class CompanionConfig {
 
     private static Map<String, HudWidgetPosition> defaultHudWidgetPositions() {
         Map<String, HudWidgetPosition> defaults = new LinkedHashMap<>();
-        defaults.put(HUD_WIDGET_EVENTS_ID, new HudWidgetPosition(0.03D, 0.08D)); // top-left
-        defaults.put(HUD_WIDGET_COOLDOWNS_ID, new HudWidgetPosition(0.70D, 0.08D)); // top-right
-        defaults.put(HUD_WIDGET_SATCHELS_ID, new HudWidgetPosition(0.70D, 0.68D)); // bottom-right
-        defaults.put(HUD_WIDGET_GANG_ID, new HudWidgetPosition(0.03D, 0.68D)); // bottom-left
-        defaults.put(
-                HUD_WIDGET_LEADERBOARD_GIFT_ID, new HudWidgetPosition(0.43D, 0.08D)); // top-middle
-        defaults.put(
-                HUD_WIDGET_LEADERBOARD_GANG_ID, new HudWidgetPosition(0.03D, 0.38D)); // middle-left
-        defaults.put(
-                HUD_WIDGET_LEADERBOARD_BLOCKS_ID,
-                new HudWidgetPosition(0.70D, 0.38D)); // middle-right
-        defaults.put(
-                HUD_WIDGET_LEADERBOARD_LEVEL_ID,
-                new HudWidgetPosition(0.43D, 0.38D)); // center-middle
-        defaults.put(
-                HUD_WIDGET_LEADERBOARD_CYCLE_ID, new HudWidgetPosition(0.43D, 0.08D)); // top-middle
+        defaults.put(HUD_WIDGET_EVENTS_ID, new HudWidgetPosition(0.03D, 0.08D));
+        defaults.put(HUD_WIDGET_COOLDOWNS_ID, new HudWidgetPosition(0.70D, 0.08D));
+        defaults.put(HUD_WIDGET_SATCHELS_ID, new HudWidgetPosition(0.70D, 0.68D));
+        defaults.put(HUD_WIDGET_GANG_ID, new HudWidgetPosition(0.03D, 0.68D));
+        defaults.put(HUD_WIDGET_LEADERBOARD_GIFT_ID, new HudWidgetPosition(0.43D, 0.08D));
+        defaults.put(HUD_WIDGET_LEADERBOARD_GANG_ID, new HudWidgetPosition(0.03D, 0.38D));
+        defaults.put(HUD_WIDGET_LEADERBOARD_BLOCKS_ID, new HudWidgetPosition(0.70D, 0.38D));
+        defaults.put(HUD_WIDGET_LEADERBOARD_LEVEL_ID, new HudWidgetPosition(0.43D, 0.38D));
+        defaults.put(HUD_WIDGET_LEADERBOARD_CYCLE_ID, new HudWidgetPosition(0.43D, 0.08D));
         return defaults;
     }
 

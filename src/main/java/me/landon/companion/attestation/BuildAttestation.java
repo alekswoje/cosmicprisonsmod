@@ -37,6 +37,10 @@ public final class BuildAttestation {
                 + signature;
     }
 
+    public String canonicalPayload() {
+        return "build=" + buildId + ";sha256=" + jarSha256 + ";iat=" + issuedAt;
+    }
+
     public String buildId() {
         return buildId;
     }
@@ -59,6 +63,10 @@ public final class BuildAttestation {
 
     public boolean isSigned() {
         return !"UNSIGNED".equals(signature) && !"UNKNOWN".equals(signature);
+    }
+
+    public static BuildAttestation unsignedLocal(String modVersion) {
+        return new BuildAttestation(modVersion, "dev-local", "unknown", "unknown", "UNSIGNED");
     }
 
     private static String sanitize(String value) {
