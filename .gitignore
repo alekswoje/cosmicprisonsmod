@@ -102,9 +102,13 @@ $RECYCLE.BIN/
 
 .gradle
 build/
-launcher/node_modules/
-launcher/dist/
-launcher/release/
+
+# Local/private tooling and distribution artifacts (not for GitHub)
+launcher/
+scripts/launcher/
+release/
+release-assets/
+dist/
 
 # Ignore Gradle GUI config
 gradle-app.setting
