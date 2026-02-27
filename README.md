@@ -1,7 +1,7 @@
 # Cosmic Prisons Server Companion (Fabric Client Mod)
 
 <p align="center">
-  <a href="https://github.com/LandonDev/CosmicPrisonsMod/releases/download/launcher-latest/CosmicPrisons.Mod.Launcher.exe">
+  <a href="https://github.com/LandonDev/CosmicPrisonsMod/releases/download/launcher-latest/CosmicPrisons-Mod-Launcher.exe">
     <img alt="Download Windows Launcher" src="https://img.shields.io/badge/Windows%20Launcher-Download-0A66C2?style=for-the-badge&logo=windows&logoColor=white">
   </a>
   <a href="https://github.com/LandonDev/CosmicPrisonsMod/releases/download/launcher-latest/cosmic-launcher-macos-universal.app.zip">
