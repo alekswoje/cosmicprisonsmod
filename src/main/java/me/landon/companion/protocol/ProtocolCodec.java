@@ -34,6 +34,28 @@ public final class ProtocolCodec {
                     writer.writeBytes(signature);
                 }
             }
+            case ProtocolMessage.HudWidgetStateS2C hudWidgetState -> {
+                writeBoundedCount(
+                        writer,
+                        hudWidgetState.widgets().size(),
+                        ProtocolConstants.MAX_WIDGET_COUNT,
+                        "widgetCount");
+
+                for (ProtocolMessage.HudWidget widget : hudWidgetState.widgets()) {
+                    writer.writeString(widget.widgetId(), ProtocolConstants.MAX_STRING_BYTES);
+                    writeBoundedCount(
+                            writer,
+                            widget.lines().size(),
+                            ProtocolConstants.MAX_WIDGET_LINES,
+                            "lineCount");
+
+                    for (String line : widget.lines()) {
+                        writer.writeString(line, ProtocolConstants.MAX_STRING_BYTES);
+                    }
+
+                    writer.writeVarInt(widget.ttlSeconds());
+                }
+            }
             case ProtocolMessage.EntityMarkerDeltaS2C markerDelta -> {
                 writer.writeVarInt(markerDelta.markerType());
                 writeIntegerList(
@@ -47,11 +69,14 @@ public final class ProtocolCodec {
                         ProtocolConstants.MAX_ENTITY_DELTA,
                         "removeCount");
             }
+            case ProtocolMessage.PingIntentC2S pingIntent -> {
+                writer.writeVarInt(pingIntent.pingType());
+            }
             case ProtocolMessage.InventoryItemOverlaysS2C overlays -> {
                 writeBoundedCount(
                         writer,
                         overlays.overlays().size(),
-                        ProtocolConstants.MAX_ITEM_OVERLAY_COUNT,
+                        ProtocolConstants.MAX_ITEM_OVERLAY_ENTRIES,
                         "overlayCount");
 
                 for (ProtocolMessage.InventoryItemOverlay overlay : overlays.overlays()) {
@@ -92,7 +117,11 @@ public final class ProtocolCodec {
                             reader.readString(ProtocolConstants.MAX_STRING_BYTES),
                             reader.readVarInt());
             case SERVER_HELLO_S2C -> decodeServerHello(reader);
+            case HUD_WIDGET_STATE_S2C -> decodeHudWidgetState(reader);
             case ENTITY_MARKER_DELTA_S2C -> decodeEntityMarkerDelta(reader);
+            case PING_INTENT_C2S ->
+                    new ProtocolMessage.PingIntentC2S(
+                            readBoundedNonNegative(reader, Integer.MAX_VALUE, "pingType"));
             case INVENTORY_ITEM_OVERLAYS_S2C -> decodeInventoryItemOverlays(reader);
         };
     }
@@ -128,14 +157,41 @@ public final class ProtocolCodec {
         return new ProtocolMessage.EntityMarkerDeltaS2C(markerType, addIds, removeIds);
     }
 
+    private ProtocolMessage.HudWidgetStateS2C decodeHudWidgetState(BinaryReader reader)
+            throws BinaryDecodingException {
+        int widgetCount =
+                readBoundedCount(reader, ProtocolConstants.MAX_WIDGET_COUNT, "widgetCount");
+        List<ProtocolMessage.HudWidget> widgets =
+                ProtocolMessage.mutableHudWidgetListWithCapacity(widgetCount);
+
+        for (int widgetIndex = 0; widgetIndex < widgetCount; widgetIndex++) {
+            String widgetId = reader.readString(ProtocolConstants.MAX_STRING_BYTES);
+            int lineCount =
+                    readBoundedCount(reader, ProtocolConstants.MAX_WIDGET_LINES, "lineCount");
+            List<String> lines = new java.util.ArrayList<>(lineCount);
+
+            for (int lineIndex = 0; lineIndex < lineCount; lineIndex++) {
+                lines.add(reader.readString(ProtocolConstants.MAX_STRING_BYTES));
+            }
+
+            int ttlSeconds = readBoundedNonNegative(reader, Integer.MAX_VALUE, "ttlSeconds");
+            widgets.add(new ProtocolMessage.HudWidget(widgetId, lines, ttlSeconds));
+        }
+
+        return new ProtocolMessage.HudWidgetStateS2C(widgets);
+    }
+
     private ProtocolMessage.InventoryItemOverlaysS2C decodeInventoryItemOverlays(
             BinaryReader reader) throws BinaryDecodingException {
         int overlayCount =
-                readBoundedCount(reader, ProtocolConstants.MAX_ITEM_OVERLAY_COUNT, "overlayCount");
+                readBoundedCount(
+                        reader, ProtocolConstants.MAX_ITEM_OVERLAY_ENTRIES, "overlayCount");
         var overlays = ProtocolMessage.mutableInventoryItemOverlayListWithCapacity(overlayCount);
 
         for (int index = 0; index < overlayCount; index++) {
-            int slot = readBoundedNonNegative(reader, Integer.MAX_VALUE, "slot");
+            int slot =
+                    readBoundedNonNegative(
+                            reader, ProtocolConstants.MAX_INVENTORY_SLOT_INDEX, "slot");
             int overlayType = readBoundedNonNegative(reader, Integer.MAX_VALUE, "overlayType");
             String displayText = reader.readString(ProtocolConstants.MAX_ITEM_OVERLAY_TEXT_BYTES);
             overlays.add(new ProtocolMessage.InventoryItemOverlay(slot, overlayType, displayText));

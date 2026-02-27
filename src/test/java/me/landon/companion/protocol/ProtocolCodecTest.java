@@ -35,6 +35,19 @@ class ProtocolCodecTest {
     }
 
     @Test
+    void roundtripHudWidgetState() throws Exception {
+        assertRoundtrip(
+                new ProtocolMessage.HudWidgetStateS2C(
+                        List.of(
+                                new ProtocolMessage.HudWidget(
+                                        "events",
+                                        List.of("Meteor: 1h 20m", "Next Reboot: Not Scheduled"),
+                                        0),
+                                new ProtocolMessage.HudWidget(
+                                        "cooldowns", List.of("Gang Join: 4m 10s"), 10))));
+    }
+
+    @Test
     void roundtripInventoryItemOverlays() throws Exception {
         assertRoundtrip(
                 new ProtocolMessage.InventoryItemOverlaysS2C(
@@ -50,6 +63,11 @@ class ProtocolCodecTest {
                         ProtocolConstants.MARKER_TYPE_PEACEFUL_MINING_PASS_THROUGH,
                         List.of(45, 72, 1099),
                         List.of(3, 18)));
+    }
+
+    @Test
+    void roundtripPingIntent() throws Exception {
+        assertRoundtrip(new ProtocolMessage.PingIntentC2S(ProtocolConstants.PING_TYPE_GANG));
     }
 
     @Test
@@ -124,7 +142,30 @@ class ProtocolCodecTest {
     void rejectsUnknownMessageType() {
         BinaryWriter writer = new BinaryWriter();
         writer.writeVarInt(ProtocolConstants.PROTOCOL_VERSION);
-        writer.writeVarInt(3);
+        writer.writeVarInt(999);
+
+        assertThrows(BinaryDecodingException.class, () -> codec.decode(writer.toByteArray()));
+    }
+
+    @Test
+    void rejectsOversizedWidgetCount() {
+        BinaryWriter writer = new BinaryWriter();
+        writer.writeVarInt(ProtocolConstants.PROTOCOL_VERSION);
+        writer.writeVarInt(MessageType.HUD_WIDGET_STATE_S2C.id());
+        writer.writeVarInt(ProtocolConstants.MAX_WIDGET_COUNT + 1);
+
+        assertThrows(BinaryDecodingException.class, () -> codec.decode(writer.toByteArray()));
+    }
+
+    @Test
+    void rejectsOversizedWidgetLineCount() {
+        BinaryWriter writer = new BinaryWriter();
+        writer.writeVarInt(ProtocolConstants.PROTOCOL_VERSION);
+        writer.writeVarInt(MessageType.HUD_WIDGET_STATE_S2C.id());
+        writer.writeVarInt(1);
+        writer.writeVarInt(6);
+        writer.writeBytes("events".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        writer.writeVarInt(ProtocolConstants.MAX_WIDGET_LINES + 1);
 
         assertThrows(BinaryDecodingException.class, () -> codec.decode(writer.toByteArray()));
     }

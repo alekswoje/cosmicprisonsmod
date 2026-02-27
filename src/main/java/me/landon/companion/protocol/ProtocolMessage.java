@@ -9,7 +9,9 @@ import java.util.Optional;
 public sealed interface ProtocolMessage
         permits ProtocolMessage.ClientHelloC2S,
                 ProtocolMessage.ServerHelloS2C,
+                ProtocolMessage.HudWidgetStateS2C,
                 ProtocolMessage.EntityMarkerDeltaS2C,
+                ProtocolMessage.PingIntentC2S,
                 ProtocolMessage.InventoryItemOverlaysS2C {
 
     MessageType type();
@@ -48,6 +50,13 @@ public sealed interface ProtocolMessage
         }
     }
 
+    record HudWidget(String widgetId, List<String> lines, int ttlSeconds) {
+        public HudWidget {
+            widgetId = Objects.requireNonNull(widgetId, "widgetId");
+            lines = List.copyOf(Objects.requireNonNull(lines, "lines"));
+        }
+    }
+
     record EntityMarkerDeltaS2C(
             int markerType, List<Integer> addEntityIds, List<Integer> removeEntityIds)
             implements ProtocolMessage {
@@ -75,6 +84,19 @@ public sealed interface ProtocolMessage
         }
     }
 
+    record PingIntentC2S(int pingType) implements ProtocolMessage {
+        public PingIntentC2S {
+            if (pingType < 0) {
+                throw new IllegalArgumentException("pingType must be non-negative");
+            }
+        }
+
+        @Override
+        public MessageType type() {
+            return MessageType.PING_INTENT_C2S;
+        }
+    }
+
     record ServerHelloS2C(
             String serverId,
             String serverPluginVersion,
@@ -94,6 +116,17 @@ public sealed interface ProtocolMessage
         }
     }
 
+    record HudWidgetStateS2C(List<HudWidget> widgets) implements ProtocolMessage {
+        public HudWidgetStateS2C {
+            widgets = List.copyOf(Objects.requireNonNull(widgets, "widgets"));
+        }
+
+        @Override
+        public MessageType type() {
+            return MessageType.HUD_WIDGET_STATE_S2C;
+        }
+    }
+
     record InventoryItemOverlaysS2C(List<InventoryItemOverlay> overlays)
             implements ProtocolMessage {
         public InventoryItemOverlaysS2C {
@@ -107,6 +140,10 @@ public sealed interface ProtocolMessage
     }
 
     static List<InventoryItemOverlay> mutableInventoryItemOverlayListWithCapacity(int size) {
+        return new ArrayList<>(size);
+    }
+
+    static List<HudWidget> mutableHudWidgetListWithCapacity(int size) {
         return new ArrayList<>(size);
     }
 

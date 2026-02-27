@@ -78,13 +78,79 @@ public final class FeatureSettingsScreen extends Screen {
             mainButtons.add(toggleButton);
         }
 
+        int footerY = height - 30;
+        int footerButtonCount = 4;
+        int footerGap = 8;
+        int footerButtonWidth =
+                Math.max(
+                        84,
+                        Math.min(
+                                106,
+                                (width - 24 - (footerGap * (footerButtonCount - 1)))
+                                        / footerButtonCount));
+        int footerStartX =
+                (width
+                                - ((footerButtonWidth * footerButtonCount)
+                                        + (footerGap * (footerButtonCount - 1))))
+                        / 2;
+
+        ButtonWidget hudLayoutButton =
+                addDrawableChild(
+                        ButtonWidget.builder(
+                                        Text.translatable(
+                                                "text.cosmicprisonsmod.settings.button.hud_layout"),
+                                        button ->
+                                                client.setScreen(
+                                                        new HudLayoutEditorScreen(runtime, this)))
+                                .dimensions(footerStartX, footerY, footerButtonWidth, 20)
+                                .build());
+        mainButtons.add(hudLayoutButton);
+
+        ButtonWidget eventFiltersButton =
+                addDrawableChild(
+                        ButtonWidget.builder(
+                                        Text.translatable(
+                                                "text.cosmicprisonsmod.settings.button.event_filters"),
+                                        button ->
+                                                client.setScreen(
+                                                        new HudEventVisibilityScreen(
+                                                                runtime, this)))
+                                .dimensions(
+                                        footerStartX + footerButtonWidth + footerGap,
+                                        footerY,
+                                        footerButtonWidth,
+                                        20)
+                                .build());
+        mainButtons.add(eventFiltersButton);
+
+        ButtonWidget pingKeysButton =
+                addDrawableChild(
+                        ButtonWidget.builder(
+                                        Text.translatable(
+                                                "text.cosmicprisonsmod.settings.button.ping_keys"),
+                                        button ->
+                                                client.setScreen(
+                                                        new PingKeybindSettingsScreen(
+                                                                runtime, this)))
+                                .dimensions(
+                                        footerStartX + ((footerButtonWidth + footerGap) * 2),
+                                        footerY,
+                                        footerButtonWidth,
+                                        20)
+                                .build());
+        mainButtons.add(pingKeysButton);
+
         ButtonWidget doneButton =
                 addDrawableChild(
                         ButtonWidget.builder(
                                         Text.translatable(
                                                 "text.cosmicprisonsmod.settings.button.done"),
                                         button -> close())
-                                .dimensions((width / 2) - 84, height - 30, 168, 20)
+                                .dimensions(
+                                        footerStartX + ((footerButtonWidth + footerGap) * 3),
+                                        footerY,
+                                        footerButtonWidth,
+                                        20)
                                 .build());
         mainButtons.add(doneButton);
 
@@ -379,6 +445,79 @@ public final class FeatureSettingsScreen extends Screen {
             return;
         }
 
+        if (ClientFeatures.HUD_COOLDOWNS_ID.equals(feature.id())) {
+            drawPopupTextExample(
+                    drawContext,
+                    leftExampleX,
+                    examplesY,
+                    exampleWidth,
+                    Text.translatable(
+                            "text.cosmicprisonsmod.feature.hud_cooldowns.example.active"));
+            drawPopupTextExample(
+                    drawContext,
+                    rightExampleX,
+                    examplesY,
+                    exampleWidth,
+                    Text.translatable(
+                            "text.cosmicprisonsmod.feature.hud_cooldowns.example.ordering"));
+            return;
+        }
+
+        if (ClientFeatures.HUD_EVENTS_ID.equals(feature.id())) {
+            drawPopupTextExample(
+                    drawContext,
+                    leftExampleX,
+                    examplesY,
+                    exampleWidth,
+                    Text.translatable("text.cosmicprisonsmod.feature.hud_events.example.reboot"));
+            drawPopupTextExample(
+                    drawContext,
+                    rightExampleX,
+                    examplesY,
+                    exampleWidth,
+                    Text.translatable(
+                            "text.cosmicprisonsmod.feature.hud_events.example.level_cap"));
+            return;
+        }
+
+        if (ClientFeatures.HUD_SATCHEL_DISPLAY_ID.equals(feature.id())) {
+            drawPopupTextExample(
+                    drawContext,
+                    leftExampleX,
+                    examplesY,
+                    exampleWidth,
+                    Text.translatable(
+                            "text.cosmicprisonsmod.feature.hud_satchel_display.example.ore_line"));
+            drawPopupTextExample(
+                    drawContext,
+                    rightExampleX,
+                    examplesY,
+                    exampleWidth,
+                    Text.translatable(
+                            "text.cosmicprisonsmod.feature.hud_satchel_display.example.count"));
+            return;
+        }
+
+        if (ClientFeatures.PINGS_ID.equals(feature.id())) {
+            drawPopupTextExample(
+                    drawContext,
+                    leftExampleX,
+                    examplesY,
+                    exampleWidth,
+                    Text.translatable(
+                            "text.cosmicprisonsmod.feature.pings.example.gang",
+                            runtime.gangPingKeybindLabel()));
+            drawPopupTextExample(
+                    drawContext,
+                    rightExampleX,
+                    examplesY,
+                    exampleWidth,
+                    Text.translatable(
+                            "text.cosmicprisonsmod.feature.pings.example.truce",
+                            runtime.trucePingKeybindLabel()));
+            return;
+        }
+
         drawPopupExample(
                 drawContext,
                 leftExampleX,
@@ -484,6 +623,26 @@ public final class FeatureSettingsScreen extends Screen {
             return;
         }
 
+        if (ClientFeatures.HUD_COOLDOWNS_ID.equals(feature.id())) {
+            drawContext.drawItem(Items.CLOCK.getDefaultStack(), itemX, itemY);
+            return;
+        }
+
+        if (ClientFeatures.HUD_EVENTS_ID.equals(feature.id())) {
+            drawContext.drawItem(Items.RECOVERY_COMPASS.getDefaultStack(), itemX, itemY);
+            return;
+        }
+
+        if (ClientFeatures.HUD_SATCHEL_DISPLAY_ID.equals(feature.id())) {
+            drawContext.drawItem(Items.BUNDLE.getDefaultStack(), itemX, itemY);
+            return;
+        }
+
+        if (ClientFeatures.PINGS_ID.equals(feature.id())) {
+            drawContext.drawItem(Items.BEACON.getDefaultStack(), itemX, itemY);
+            return;
+        }
+
         Text icon = Text.translatable(feature.iconTranslationKey());
         int iconWidth = textRenderer.getWidth(icon);
         drawContext.drawTextWithShadow(
@@ -538,6 +697,22 @@ public final class FeatureSettingsScreen extends Screen {
 
         if (ClientFeatures.INVENTORY_ITEM_OVERLAYS_ID.equals(featureId)) {
             return 0x46A9FF;
+        }
+
+        if (ClientFeatures.HUD_COOLDOWNS_ID.equals(featureId)) {
+            return 0x4EA7FF;
+        }
+
+        if (ClientFeatures.HUD_EVENTS_ID.equals(featureId)) {
+            return 0xF1B95E;
+        }
+
+        if (ClientFeatures.HUD_SATCHEL_DISPLAY_ID.equals(featureId)) {
+            return 0x6CE39B;
+        }
+
+        if (ClientFeatures.PINGS_ID.equals(featureId)) {
+            return 0xE5914A;
         }
 
         return 0x6C7FA0;

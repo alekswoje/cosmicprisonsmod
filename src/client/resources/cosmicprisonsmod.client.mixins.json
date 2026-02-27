@@ -5,6 +5,7 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "CustomPayloadCodecFallbackMixin",
+    "EquipmentRendererPeacefulMiningGhostMixin",
     "GameRendererPeacefulMiningMixin",
     "HandledScreenItemOverlayMixin",
     "LivingEntityRendererPeacefulMiningGhostMixin",

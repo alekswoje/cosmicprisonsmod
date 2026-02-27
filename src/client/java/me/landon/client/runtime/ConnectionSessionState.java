@@ -3,19 +3,31 @@ package me.landon.client.runtime;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.ints.IntSet;
 import it.unimi.dsi.fastutil.ints.IntSets;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import me.landon.companion.protocol.ProtocolConstants;
 import me.landon.companion.protocol.ProtocolMessage;
 import me.landon.companion.session.ConnectionGateState;
 
 public final class ConnectionSessionState {
     public record ItemOverlayEntry(int overlayType, String displayText) {}
 
+    public record HudWidgetEntry(List<String> lines, int ttlSeconds, long receivedAtEpochMillis) {
+        public HudWidgetEntry {
+            lines = List.copyOf(lines);
+        }
+    }
+
     private final ConnectionGateState gateState = new ConnectionGateState();
     private final Map<Integer, ItemOverlayEntry> inventoryItemOverlays = new LinkedHashMap<>();
+    private final Map<String, HudWidgetEntry> hudWidgets = new LinkedHashMap<>();
     private final IntSet peacefulMiningPassThroughIds = new IntOpenHashSet();
+    private final IntSet gangPingBeaconIds = new IntOpenHashSet();
+    private final IntSet trucePingBeaconIds = new IntOpenHashSet();
 
     private String serverId = "";
     private String serverPluginVersion = "";
@@ -23,6 +35,7 @@ public final class ConnectionSessionState {
 
     private boolean helloSent;
     private boolean malformedPacketLogged;
+    private boolean hudWidgetsSupported;
     private boolean inventoryItemOverlaysSupported;
 
     public ConnectionGateState gateState() {
@@ -32,12 +45,16 @@ public final class ConnectionSessionState {
     public void reset() {
         gateState.reset();
         clearInventoryItemOverlays();
+        clearHudWidgets();
         clearPeacefulMiningPassThroughIds();
+        clearGangPingBeaconIds();
+        clearTrucePingBeaconIds();
         serverId = "";
         serverPluginVersion = "";
         serverFeatureFlags = 0;
         helloSent = false;
         malformedPacketLogged = false;
+        hudWidgetsSupported = false;
         inventoryItemOverlaysSupported = false;
     }
 
@@ -67,6 +84,14 @@ public final class ConnectionSessionState {
         return inventoryItemOverlaysSupported;
     }
 
+    public void setHudWidgetsSupported(boolean hudWidgetsSupported) {
+        this.hudWidgetsSupported = hudWidgetsSupported;
+    }
+
+    public boolean hudWidgetsSupported() {
+        return hudWidgetsSupported;
+    }
+
     public void replaceInventoryItemOverlays(List<ProtocolMessage.InventoryItemOverlay> overlays) {
         inventoryItemOverlays.clear();
 
@@ -86,6 +111,49 @@ public final class ConnectionSessionState {
 
     public void clearInventoryItemOverlays() {
         inventoryItemOverlays.clear();
+    }
+
+    public void replaceHudWidgets(List<ProtocolMessage.HudWidget> widgets) {
+        hudWidgets.clear();
+        long receivedAt = System.currentTimeMillis();
+
+        for (ProtocolMessage.HudWidget widget : widgets) {
+            if (widget == null) {
+                continue;
+            }
+
+            String widgetId = normalizeWidgetId(widget.widgetId());
+            if (widgetId.isEmpty()) {
+                continue;
+            }
+
+            List<String> lines = new ArrayList<>(widget.lines().size());
+            for (String line : widget.lines()) {
+                lines.add(line == null ? "" : line);
+                if (lines.size() >= ProtocolConstants.MAX_WIDGET_LINES) {
+                    break;
+                }
+            }
+
+            int ttlSeconds = Math.max(0, widget.ttlSeconds());
+            hudWidgets.put(widgetId, new HudWidgetEntry(lines, ttlSeconds, receivedAt));
+        }
+    }
+
+    public void clearHudWidgets() {
+        hudWidgets.clear();
+    }
+
+    public HudWidgetEntry getHudWidget(String widgetId) {
+        if (widgetId == null) {
+            return null;
+        }
+
+        return hudWidgets.get(normalizeWidgetId(widgetId));
+    }
+
+    public Map<String, HudWidgetEntry> hudWidgetsSnapshot() {
+        return Collections.unmodifiableMap(new LinkedHashMap<>(hudWidgets));
     }
 
     public void applyPeacefulMiningPassThroughDelta(
@@ -117,6 +185,32 @@ public final class ConnectionSessionState {
 
     public void clearPeacefulMiningPassThroughIds() {
         peacefulMiningPassThroughIds.clear();
+    }
+
+    public void applyGangPingBeaconDelta(
+            List<Integer> addEntityIds, List<Integer> removeEntityIds) {
+        applyEntityIdDelta(gangPingBeaconIds, addEntityIds, removeEntityIds);
+    }
+
+    public void applyTrucePingBeaconDelta(
+            List<Integer> addEntityIds, List<Integer> removeEntityIds) {
+        applyEntityIdDelta(trucePingBeaconIds, addEntityIds, removeEntityIds);
+    }
+
+    public IntSet gangPingBeaconIdsSnapshot() {
+        return IntSets.unmodifiable(new IntOpenHashSet(gangPingBeaconIds));
+    }
+
+    public IntSet trucePingBeaconIdsSnapshot() {
+        return IntSets.unmodifiable(new IntOpenHashSet(trucePingBeaconIds));
+    }
+
+    public void clearGangPingBeaconIds() {
+        gangPingBeaconIds.clear();
+    }
+
+    public void clearTrucePingBeaconIds() {
+        trucePingBeaconIds.clear();
     }
 
     public ItemOverlayEntry getInventoryItemOverlay(int slot) {
@@ -154,6 +248,33 @@ public final class ConnectionSessionState {
         }
 
         return -1;
+    }
+
+    private static String normalizeWidgetId(String widgetId) {
+        if (widgetId == null) {
+            return "";
+        }
+
+        return widgetId.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static void applyEntityIdDelta(
+            IntSet target, List<Integer> addEntityIds, List<Integer> removeEntityIds) {
+        for (int entityId : addEntityIds) {
+            if (entityId < 0) {
+                continue;
+            }
+
+            target.add(entityId);
+        }
+
+        for (int entityId : removeEntityIds) {
+            if (entityId < 0) {
+                continue;
+            }
+
+            target.remove(entityId);
+        }
     }
 
     private static final int PLAYER_STORAGE_MIN_SLOT = 0;

@@ -11,10 +11,39 @@ public final class CompanionConfig {
     private static final String SIGNATURE_POLICY_OFF = "OFF";
     private static final String SIGNATURE_POLICY_LOG_ONLY = "LOG_ONLY";
     private static final String SIGNATURE_POLICY_ENFORCE = "ENFORCE";
+    public static final String HUD_WIDGET_EVENTS_ID = "events";
+    public static final String HUD_WIDGET_COOLDOWNS_ID = "cooldowns";
+    public static final String HUD_WIDGET_SATCHELS_ID = "satchels";
+    public static final String HUD_EVENT_METEORITE = "meteorite";
+    public static final String HUD_EVENT_METEOR = "meteor";
+    public static final String HUD_EVENT_ALTAR_SPAWN = "altar_spawn";
+    public static final String HUD_EVENT_KOTH = "koth";
+    public static final String HUD_EVENT_CREDIT_SHOP_RESET = "credit_shop_reset";
+    public static final String HUD_EVENT_JACKPOT = "jackpot";
+    public static final String HUD_EVENT_FLASH_SALE = "flash_sale";
+    public static final String HUD_EVENT_MERCHANT = "merchant";
+    public static final String HUD_EVENT_NEXT_REBOOT = "next_reboot";
+    public static final String HUD_EVENT_NEXT_LEVEL_CAP_UNLOCK = "next_level_cap_day_unlock";
+    public static final List<String> HUD_EVENT_KEYS =
+            List.of(
+                    HUD_EVENT_METEORITE,
+                    HUD_EVENT_METEOR,
+                    HUD_EVENT_ALTAR_SPAWN,
+                    HUD_EVENT_KOTH,
+                    HUD_EVENT_CREDIT_SHOP_RESET,
+                    HUD_EVENT_JACKPOT,
+                    HUD_EVENT_FLASH_SALE,
+                    HUD_EVENT_MERCHANT,
+                    HUD_EVENT_NEXT_REBOOT,
+                    HUD_EVENT_NEXT_LEVEL_CAP_UNLOCK);
+    public static final List<String> HUD_WIDGET_IDS =
+            List.of(HUD_WIDGET_EVENTS_ID, HUD_WIDGET_COOLDOWNS_ID, HUD_WIDGET_SATCHELS_ID);
 
     public List<String> allowedServerIds = new ArrayList<>();
     public boolean enablePayloadCodecFallback = false;
     public Map<String, Boolean> featureToggles = new LinkedHashMap<>();
+    public Map<String, HudWidgetPosition> hudWidgetPositions = new LinkedHashMap<>();
+    public Map<String, Boolean> hudEventVisibility = new LinkedHashMap<>();
     public String serverSignaturePolicy = SIGNATURE_POLICY_LOG_ONLY;
     // Legacy field retained for config compatibility.
     public boolean requireServerSignature;
@@ -26,6 +55,8 @@ public final class CompanionConfig {
         config.serverSignaturePolicy = SIGNATURE_POLICY_LOG_ONLY;
         config.requireServerSignature = false;
         config.allowedServerIds = List.of(OFFICIAL_ALLOWED_SERVER_ID);
+        config.hudWidgetPositions = defaultHudWidgetPositions();
+        config.hudEventVisibility = defaultHudEventVisibility();
         return config;
     }
 
@@ -40,6 +71,14 @@ public final class CompanionConfig {
 
         if (featureToggles == null) {
             featureToggles = new LinkedHashMap<>();
+        }
+
+        if (hudWidgetPositions == null) {
+            hudWidgetPositions = new LinkedHashMap<>();
+        }
+
+        if (hudEventVisibility == null) {
+            hudEventVisibility = new LinkedHashMap<>();
         }
 
         // Official policy: only the production domain is allowed.
@@ -82,6 +121,36 @@ public final class CompanionConfig {
         }
 
         featureToggles = cleanedFeatureToggles;
+
+        Map<String, HudWidgetPosition> cleanedWidgetPositions = defaultHudWidgetPositions();
+        for (Map.Entry<String, HudWidgetPosition> entry : hudWidgetPositions.entrySet()) {
+            if (entry.getKey() == null || entry.getValue() == null) {
+                continue;
+            }
+
+            String normalizedId = entry.getKey().trim().toLowerCase(Locale.ROOT);
+            if (!HUD_WIDGET_IDS.contains(normalizedId)) {
+                continue;
+            }
+
+            cleanedWidgetPositions.put(normalizedId, entry.getValue().clamped());
+        }
+        hudWidgetPositions = cleanedWidgetPositions;
+
+        Map<String, Boolean> cleanedHudEventVisibility = defaultHudEventVisibility();
+        for (Map.Entry<String, Boolean> entry : hudEventVisibility.entrySet()) {
+            if (entry.getKey() == null || entry.getValue() == null) {
+                continue;
+            }
+
+            String normalizedKey = entry.getKey().trim().toLowerCase(Locale.ROOT);
+            if (!HUD_EVENT_KEYS.contains(normalizedKey)) {
+                continue;
+            }
+
+            cleanedHudEventVisibility.put(normalizedKey, entry.getValue());
+        }
+        hudEventVisibility = cleanedHudEventVisibility;
     }
 
     public boolean isSignatureVerificationEnforced() {
@@ -94,5 +163,44 @@ public final class CompanionConfig {
 
     public boolean isSignatureVerificationOff() {
         return SIGNATURE_POLICY_OFF.equals(serverSignaturePolicy);
+    }
+
+    public static final class HudWidgetPosition {
+        public double x;
+        public double y;
+
+        public HudWidgetPosition() {}
+
+        public HudWidgetPosition(double x, double y) {
+            this.x = x;
+            this.y = y;
+        }
+
+        private HudWidgetPosition clamped() {
+            return new HudWidgetPosition(clamp01(x), clamp01(y));
+        }
+
+        private static double clamp01(double value) {
+            if (Double.isNaN(value) || Double.isInfinite(value)) {
+                return 0.0D;
+            }
+            return Math.max(0.0D, Math.min(1.0D, value));
+        }
+    }
+
+    private static Map<String, HudWidgetPosition> defaultHudWidgetPositions() {
+        Map<String, HudWidgetPosition> defaults = new LinkedHashMap<>();
+        defaults.put(HUD_WIDGET_EVENTS_ID, new HudWidgetPosition(0.73D, 0.10D));
+        defaults.put(HUD_WIDGET_COOLDOWNS_ID, new HudWidgetPosition(0.05D, 0.16D));
+        defaults.put(HUD_WIDGET_SATCHELS_ID, new HudWidgetPosition(0.73D, 0.43D));
+        return defaults;
+    }
+
+    private static Map<String, Boolean> defaultHudEventVisibility() {
+        Map<String, Boolean> defaults = new LinkedHashMap<>();
+        for (String key : HUD_EVENT_KEYS) {
+            defaults.put(key, true);
+        }
+        return defaults;
     }
 }

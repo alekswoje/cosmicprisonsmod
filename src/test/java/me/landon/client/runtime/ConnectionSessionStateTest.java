@@ -66,6 +66,37 @@ class ConnectionSessionStateTest {
     }
 
     @Test
+    void hudWidgetSnapshotReplacesPriorState() {
+        ConnectionSessionState sessionState = new ConnectionSessionState();
+        sessionState.replaceHudWidgets(
+                List.of(
+                        new ProtocolMessage.HudWidget("events", List.of("Meteor: 10m"), 0),
+                        new ProtocolMessage.HudWidget("cooldowns", List.of("Gang Join: 2m"), 5)));
+
+        sessionState.replaceHudWidgets(
+                List.of(new ProtocolMessage.HudWidget("satchels", List.of("Coal: 1K/2K x1"), 0)));
+
+        assertNull(sessionState.getHudWidget("events"));
+        assertNull(sessionState.getHudWidget("cooldowns"));
+        ConnectionSessionState.HudWidgetEntry satchels = sessionState.getHudWidget("satchels");
+        assertNotNull(satchels);
+        assertEquals(List.of("Coal: 1K/2K x1"), satchels.lines());
+    }
+
+    @Test
+    void resetClearsHudWidgetsAndSupportFlag() {
+        ConnectionSessionState sessionState = new ConnectionSessionState();
+        sessionState.setHudWidgetsSupported(true);
+        sessionState.replaceHudWidgets(
+                List.of(new ProtocolMessage.HudWidget("events", List.of("Meteor: 1m"), 1)));
+
+        sessionState.reset();
+
+        assertTrue(sessionState.hudWidgetsSnapshot().isEmpty());
+        assertFalse(sessionState.hudWidgetsSupported());
+    }
+
+    @Test
     void peacefulMiningDeltaAddsAndRemovesEntityIds() {
         ConnectionSessionState sessionState = new ConnectionSessionState();
 
@@ -89,5 +120,40 @@ class ConnectionSessionStateTest {
 
         assertFalse(sessionState.isPeacefulMiningPassThroughEntity(11));
         assertTrue(sessionState.peacefulMiningPassThroughIdsSnapshot().isEmpty());
+    }
+
+    @Test
+    void gangAndTrucePingDeltasTrackIndependentEntityIds() {
+        ConnectionSessionState sessionState = new ConnectionSessionState();
+
+        sessionState.applyGangPingBeaconDelta(List.of(7, 9), List.of());
+        sessionState.applyTrucePingBeaconDelta(List.of(14, 15), List.of());
+        assertEquals(
+                List.of(7, 9),
+                sessionState.gangPingBeaconIdsSnapshot().intStream().sorted().boxed().toList());
+        assertEquals(
+                List.of(14, 15),
+                sessionState.trucePingBeaconIdsSnapshot().intStream().sorted().boxed().toList());
+
+        sessionState.applyGangPingBeaconDelta(List.of(), List.of(7));
+        sessionState.applyTrucePingBeaconDelta(List.of(), List.of(15));
+        assertEquals(
+                List.of(9),
+                sessionState.gangPingBeaconIdsSnapshot().intStream().sorted().boxed().toList());
+        assertEquals(
+                List.of(14),
+                sessionState.trucePingBeaconIdsSnapshot().intStream().sorted().boxed().toList());
+    }
+
+    @Test
+    void resetClearsGangAndTrucePingBeaconIds() {
+        ConnectionSessionState sessionState = new ConnectionSessionState();
+        sessionState.applyGangPingBeaconDelta(List.of(1), List.of());
+        sessionState.applyTrucePingBeaconDelta(List.of(2), List.of());
+
+        sessionState.reset();
+
+        assertTrue(sessionState.gangPingBeaconIdsSnapshot().isEmpty());
+        assertTrue(sessionState.trucePingBeaconIdsSnapshot().isEmpty());
     }
 }

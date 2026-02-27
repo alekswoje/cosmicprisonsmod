@@ -1,6 +1,7 @@
 package me.landon.mixin.client;
 
 import me.landon.client.runtime.CompanionClientRuntime;
+import me.landon.client.runtime.PeacefulMiningRenderStateKeys;
 import net.minecraft.client.render.entity.LivingEntityRenderer;
 import net.minecraft.client.render.entity.state.LivingEntityRenderState;
 import net.minecraft.entity.LivingEntity;
@@ -20,7 +21,11 @@ public abstract class LivingEntityRendererPeacefulMiningGhostMixin {
             LivingEntityRenderState state,
             float tickDelta,
             CallbackInfo callbackInfo) {
-        if (!CompanionClientRuntime.getInstance().isPeacefulMiningGhostedEntity(entity.getId())) {
+        boolean ghosted =
+                CompanionClientRuntime.getInstance().isPeacefulMiningGhostedEntity(entity.getId());
+        state.setData(PeacefulMiningRenderStateKeys.GHOSTED, ghosted);
+
+        if (!ghosted) {
             return;
         }
 

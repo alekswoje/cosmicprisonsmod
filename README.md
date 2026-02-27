@@ -1,5 +1,17 @@
 # Cosmic Prisons Server Companion (Fabric Client Mod)
 
+<p align="center">
+  <a href="https://github.com/LandonDev/CosmicPrisonsMod/releases/latest/download/cosmic-launcher-win-x64.zip">
+    <img alt="Download Windows Launcher" src="https://img.shields.io/badge/Windows%20Launcher-Download-0A66C2?style=for-the-badge&logo=windows&logoColor=white">
+  </a>
+  <a href="https://github.com/LandonDev/CosmicPrisonsMod/releases/latest/download/cosmic-launcher-macos-universal.zip">
+    <img alt="Download macOS Launcher" src="https://img.shields.io/badge/macOS%20Launcher-Download-111111?style=for-the-badge&logo=apple&logoColor=white">
+  </a>
+  <a href="https://github.com/LandonDev/CosmicPrisonsMod/releases/latest/download/CosmicPrisonsMod-latest.jar">
+    <img alt="Download Latest Mod JAR" src="https://img.shields.io/badge/Latest%20Mod%20JAR-Download-2DA44E?style=for-the-badge&logo=java&logoColor=white">
+  </a>
+</p>
+
 ## What This Mod Is
 Cosmic Prisons Server Companion is an optional **Fabric client mod** for Cosmic Prisons players.
 

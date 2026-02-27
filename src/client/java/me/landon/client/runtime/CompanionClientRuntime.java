@@ -1,6 +1,8 @@
 package me.landon.client.runtime;
 
+import it.unimi.dsi.fastutil.ints.IntSet;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import me.landon.CosmicPrisonsMod;
@@ -20,6 +22,7 @@ import me.landon.companion.protocol.ProtocolMessage;
 import me.landon.companion.session.ConnectionGateState;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientWorldEvents;
+import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
@@ -32,17 +35,24 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.GameMenuScreen;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.input.KeyInput;
+import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.render.RenderTickCounter;
+import net.minecraft.client.util.InputUtil;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.ItemStack;
+import net.minecraft.particle.ParticleEffect;
+import net.minecraft.particle.ParticleTypes;
 import net.minecraft.screen.ScreenHandler;
 import net.minecraft.screen.slot.Slot;
 import net.minecraft.text.Text;
+import net.minecraft.util.Identifier;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.hit.HitResult;
+import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -55,6 +65,15 @@ public final class CompanionClientRuntime {
     private static final int PLAYER_STORAGE_MAX_SLOT = 35;
     private static final int KNOWN_OVERLAY_STACK_LIMIT = 64;
     private static final int PENDING_CURSOR_OVERLAY_FRAMES = 4;
+    private static final int HUD_PANEL_MIN_WIDTH = 170;
+    private static final int HUD_PANEL_MAX_WIDTH = 320;
+    private static final int HUD_PANEL_HEADER_HEIGHT = 17;
+    private static final int HUD_PANEL_LINE_HEIGHT = 11;
+    private static final int HUD_PANEL_HORIZONTAL_PADDING = 8;
+    private static final int HUD_PANEL_VERTICAL_PADDING = 6;
+    private static final KeyBinding.Category PING_KEYBIND_CATEGORY =
+            KeyBinding.Category.create(Identifier.of(CosmicPrisonsMod.MOD_ID, "pings"));
+    private static final int PING_PARTICLE_COLUMN_SEGMENTS = 6;
 
     private final ProtocolCodec protocolCodec = new ProtocolCodec();
     private final SignatureVerifier signatureVerifier = new SignatureVerifier();
@@ -62,6 +81,8 @@ public final class CompanionClientRuntime {
     private final CompanionConfigManager configManager = new CompanionConfigManager();
     private final BuildAttestationLoader buildAttestationLoader = new BuildAttestationLoader();
     private final List<KnownOverlayStack> knownOverlayStacks = new ArrayList<>();
+    private KeyBinding gangPingKeyBinding;
+    private KeyBinding trucePingKeyBinding;
 
     private CompanionConfig config;
     private BuildAttestation buildAttestation;
@@ -88,6 +109,7 @@ public final class CompanionClientRuntime {
         config = configManager.load();
         buildAttestation = buildAttestationLoader.load(resolveModVersion());
         ensureFeatureDefaultsPersisted();
+        initializePingKeybinds();
 
         ClientPlayNetworking.registerGlobalReceiver(
                 CompanionRawPayload.ID, this::onPayloadReceived);
@@ -97,7 +119,7 @@ public final class CompanionClientRuntime {
         ClientWorldEvents.AFTER_CLIENT_WORLD_CHANGE.register(this::onWorldChange);
         ScreenEvents.AFTER_INIT.register(this::onScreenAfterInit);
 
-        HudRenderCallback.EVENT.register(this::renderHotbarOverlays);
+        HudRenderCallback.EVENT.register(this::renderHud);
 
         initialized = true;
     }
@@ -129,6 +151,114 @@ public final class CompanionClientRuntime {
         return ClientFeatures.findById(featureId)
                 .map(this::isFeatureSupportedByServer)
                 .orElse(false);
+    }
+
+    public synchronized Map<String, Boolean> getHudEventVisibilitySnapshot() {
+        return new LinkedHashMap<>(getConfig().hudEventVisibility);
+    }
+
+    public synchronized void setHudEventVisibility(String eventKey, boolean visible) {
+        if (eventKey == null || eventKey.isBlank()) {
+            return;
+        }
+
+        CompanionConfig currentConfig = getConfig();
+        currentConfig.hudEventVisibility.put(
+                eventKey.trim().toLowerCase(java.util.Locale.ROOT), visible);
+        configManager.save(currentConfig);
+        config = currentConfig;
+    }
+
+    public synchronized Map<String, CompanionConfig.HudWidgetPosition> getHudWidgetPositions() {
+        Map<String, CompanionConfig.HudWidgetPosition> snapshot = new LinkedHashMap<>();
+        for (Map.Entry<String, CompanionConfig.HudWidgetPosition> entry :
+                getConfig().hudWidgetPositions.entrySet()) {
+            CompanionConfig.HudWidgetPosition position = entry.getValue();
+            snapshot.put(
+                    entry.getKey(), new CompanionConfig.HudWidgetPosition(position.x, position.y));
+        }
+        return snapshot;
+    }
+
+    public synchronized CompanionConfig.HudWidgetPosition getHudWidgetPosition(String widgetId) {
+        CompanionConfig.HudWidgetPosition configured =
+                getConfig().hudWidgetPositions.get(normalizeWidgetId(widgetId));
+        if (configured == null) {
+            CompanionConfig fallback = CompanionConfig.defaults();
+            CompanionConfig.HudWidgetPosition fallbackPosition =
+                    fallback.hudWidgetPositions.get(normalizeWidgetId(widgetId));
+            if (fallbackPosition != null) {
+                return new CompanionConfig.HudWidgetPosition(
+                        fallbackPosition.x, fallbackPosition.y);
+            }
+            return new CompanionConfig.HudWidgetPosition(0.5D, 0.5D);
+        }
+        return new CompanionConfig.HudWidgetPosition(configured.x, configured.y);
+    }
+
+    public synchronized void setHudWidgetPosition(
+            String widgetId, double normalizedX, double normalizedY) {
+        if (widgetId == null || widgetId.isBlank()) {
+            return;
+        }
+
+        CompanionConfig currentConfig = getConfig();
+        currentConfig.hudWidgetPositions.put(
+                normalizeWidgetId(widgetId),
+                new CompanionConfig.HudWidgetPosition(normalizedX, normalizedY));
+        configManager.save(currentConfig);
+        config = currentConfig;
+    }
+
+    public synchronized void resetHudLayout() {
+        CompanionConfig defaults = CompanionConfig.defaults();
+        CompanionConfig currentConfig = getConfig();
+        currentConfig.hudWidgetPositions = new LinkedHashMap<>(defaults.hudWidgetPositions);
+        configManager.save(currentConfig);
+        config = currentConfig;
+    }
+
+    public synchronized Text gangPingKeybindLabel() {
+        if (gangPingKeyBinding == null) {
+            initializePingKeybinds();
+        }
+
+        return gangPingKeyBinding.getBoundKeyLocalizedText();
+    }
+
+    public synchronized Text trucePingKeybindLabel() {
+        if (trucePingKeyBinding == null) {
+            initializePingKeybinds();
+        }
+
+        return trucePingKeyBinding.getBoundKeyLocalizedText();
+    }
+
+    public synchronized void bindGangPingKey(KeyInput keyInput) {
+        if (gangPingKeyBinding == null) {
+            initializePingKeybinds();
+        }
+
+        bindKey(gangPingKeyBinding, keyInput);
+    }
+
+    public synchronized void bindTrucePingKey(KeyInput keyInput) {
+        if (trucePingKeyBinding == null) {
+            initializePingKeybinds();
+        }
+
+        bindKey(trucePingKeyBinding, keyInput);
+    }
+
+    public synchronized void resetPingKeybindsToDefault() {
+        if (gangPingKeyBinding == null || trucePingKeyBinding == null) {
+            initializePingKeybinds();
+        }
+
+        gangPingKeyBinding.setBoundKey(gangPingKeyBinding.getDefaultKey());
+        trucePingKeyBinding.setBoundKey(trucePingKeyBinding.getDefaultKey());
+        KeyBinding.updateKeysByCode();
+        persistGameOptions();
     }
 
     public void onCrosshairTargetUpdated(MinecraftClient client, float tickDelta) {
@@ -227,7 +357,10 @@ public final class CompanionClientRuntime {
                     MinecraftClient.getInstance(), session.inventoryItemOverlaysSnapshot());
 
             if (cursorStack.isEmpty()) {
-                if (pendingCursorOverlayFrames > 0 && activeCursorOverlayEntry != null) {
+                if (activeCursorOverlayEntry != null
+                        && isMouseButtonHeld(MinecraftClient.getInstance())) {
+                    overlayEntry = activeCursorOverlayEntry;
+                } else if (pendingCursorOverlayFrames > 0 && activeCursorOverlayEntry != null) {
                     pendingCursorOverlayFrames--;
                     overlayEntry = activeCursorOverlayEntry;
                 } else {
@@ -314,6 +447,9 @@ public final class CompanionClientRuntime {
             return;
         }
 
+        processPingKeybinds(client);
+        emitPingBeaconParticles(client);
+
         if (!session.helloSent() && helloRetryTicks > 0) {
             helloRetryTicks--;
             attemptSendClientHello(client);
@@ -323,7 +459,10 @@ public final class CompanionClientRuntime {
     private synchronized void onWorldChange(MinecraftClient client, ClientWorld world) {
         if (world == null) {
             session.clearInventoryItemOverlays();
+            session.clearHudWidgets();
             session.clearPeacefulMiningPassThroughIds();
+            session.clearGangPingBeaconIds();
+            session.clearTrucePingBeaconIds();
             clearOverlayRenderCaches();
             clearActivePeacefulMiningTarget();
         }
@@ -376,6 +515,8 @@ public final class CompanionClientRuntime {
         switch (message) {
             case ProtocolMessage.ServerHelloS2C serverHello ->
                     handleServerHello(frame.protocolVersion(), serverHello, client);
+            case ProtocolMessage.HudWidgetStateS2C hudWidgetState ->
+                    handleHudWidgetState(hudWidgetState);
             case ProtocolMessage.EntityMarkerDeltaS2C markerDelta ->
                     handleEntityMarkerDelta(markerDelta);
             case ProtocolMessage.InventoryItemOverlaysS2C overlays ->
@@ -413,6 +554,10 @@ public final class CompanionClientRuntime {
 
         session.setServerHello(serverHello);
 
+        boolean supportsHudWidgets =
+                (serverHello.serverFeatureFlagsBitset()
+                                & ProtocolConstants.SERVER_FEATURE_HUD_WIDGETS)
+                        != 0;
         boolean supportsInventoryItemOverlays =
                 (serverHello.serverFeatureFlagsBitset()
                                 & ProtocolConstants.SERVER_FEATURE_INVENTORY_ITEM_OVERLAYS)
@@ -421,7 +566,16 @@ public final class CompanionClientRuntime {
                 (serverHello.serverFeatureFlagsBitset()
                                 & ProtocolConstants.SERVER_FEATURE_ENTITY_MARKERS)
                         != 0;
+        boolean supportsGangTrucePings =
+                (serverHello.serverFeatureFlagsBitset()
+                                & ProtocolConstants.FEATURE_GANG_TRUCE_PINGS)
+                        != 0;
+        session.setHudWidgetsSupported(supportsHudWidgets);
         session.setInventoryItemOverlaysSupported(supportsInventoryItemOverlays);
+
+        if (!supportsHudWidgets) {
+            session.clearHudWidgets();
+        }
 
         if (!supportsInventoryItemOverlays) {
             session.clearInventoryItemOverlays();
@@ -432,6 +586,11 @@ public final class CompanionClientRuntime {
             session.clearPeacefulMiningPassThroughIds();
             clearActivePeacefulMiningTarget();
         }
+
+        if (!supportsGangTrucePings) {
+            session.clearGangPingBeaconIds();
+            session.clearTrucePingBeaconIds();
+        }
     }
 
     private void handleInventoryItemOverlays(ProtocolMessage.InventoryItemOverlaysS2C overlays) {
@@ -440,20 +599,30 @@ public final class CompanionClientRuntime {
         }
 
         session.replaceInventoryItemOverlays(overlays.overlays());
+        cacheKnownOverlayStacksFromCurrentSnapshot();
+    }
 
-        if (overlays.overlays().isEmpty()) {
-            clearOverlayRenderCaches();
+    private void handleHudWidgetState(ProtocolMessage.HudWidgetStateS2C hudWidgetState) {
+        if (!session.hudWidgetsSupported()) {
+            session.setHudWidgetsSupported(true);
         }
+
+        session.replaceHudWidgets(hudWidgetState.widgets());
     }
 
     private void handleEntityMarkerDelta(ProtocolMessage.EntityMarkerDeltaS2C markerDelta) {
-        if (markerDelta.markerType()
-                != ProtocolConstants.MARKER_TYPE_PEACEFUL_MINING_PASS_THROUGH) {
-            return;
+        switch (markerDelta.markerType()) {
+            case ProtocolConstants.MARKER_TYPE_PEACEFUL_MINING_PASS_THROUGH ->
+                    session.applyPeacefulMiningPassThroughDelta(
+                            markerDelta.addEntityIds(), markerDelta.removeEntityIds());
+            case ProtocolConstants.MARKER_TYPE_GANG_PING_BEACON ->
+                    session.applyGangPingBeaconDelta(
+                            markerDelta.addEntityIds(), markerDelta.removeEntityIds());
+            case ProtocolConstants.MARKER_TYPE_TRUCE_PING_BEACON ->
+                    session.applyTrucePingBeaconDelta(
+                            markerDelta.addEntityIds(), markerDelta.removeEntityIds());
+            default -> {}
         }
-
-        session.applyPeacefulMiningPassThroughDelta(
-                markerDelta.addEntityIds(), markerDelta.removeEntityIds());
     }
 
     private ConnectionSessionState.ItemOverlayEntry resolveSlotOverlayEntry(Slot slot) {
@@ -549,6 +718,16 @@ public final class CompanionClientRuntime {
         return slotIndex;
     }
 
+    private void cacheKnownOverlayStacksFromCurrentSnapshot() {
+        MinecraftClient client = MinecraftClient.getInstance();
+
+        if (client.player == null) {
+            return;
+        }
+
+        seedKnownOverlayStacksFromPlayerInventory(client, session.inventoryItemOverlaysSnapshot());
+    }
+
     private void seedKnownOverlayStacksFromPlayerInventory(
             MinecraftClient client,
             Map<Integer, ConnectionSessionState.ItemOverlayEntry> overlaySnapshot) {
@@ -631,18 +810,62 @@ public final class CompanionClientRuntime {
             return null;
         }
 
+        ConnectionSessionState.ItemOverlayEntry itemAndComponentMatch = null;
+        String stackName = stack.getName().getString();
+
         for (int i = knownOverlayStacks.size() - 1; i >= 0; i--) {
             KnownOverlayStack knownOverlayStack = knownOverlayStacks.get(i);
 
             if (ItemStack.areItemsAndComponentsEqual(knownOverlayStack.stack(), stack)) {
                 return knownOverlayStack.overlayEntry();
             }
+
+            if (itemAndComponentMatch != null) {
+                continue;
+            }
+
+            ItemStack knownStack = knownOverlayStack.stack();
+
+            if (knownStack.getItem() != stack.getItem()) {
+                continue;
+            }
+
+            if (!knownStack.getName().getString().equals(stackName)) {
+                continue;
+            }
+
+            itemAndComponentMatch = knownOverlayStack.overlayEntry();
         }
 
-        return null;
+        return itemAndComponentMatch;
     }
 
-    private void renderHotbarOverlays(DrawContext drawContext, RenderTickCounter tickCounter) {
+    private static boolean isMouseButtonHeld(MinecraftClient client) {
+        long windowHandle = client.getWindow().getHandle();
+        return GLFW.glfwGetMouseButton(windowHandle, GLFW.GLFW_MOUSE_BUTTON_LEFT) == GLFW.GLFW_PRESS
+                || GLFW.glfwGetMouseButton(windowHandle, GLFW.GLFW_MOUSE_BUTTON_RIGHT)
+                        == GLFW.GLFW_PRESS;
+    }
+
+    private void renderHud(DrawContext drawContext, RenderTickCounter tickCounter) {
+        renderHotbarOverlays(drawContext);
+        renderHudWidgetPanels(drawContext, false, Map.of());
+    }
+
+    public void renderHudWidgetPanelsForEditor(
+            DrawContext drawContext,
+            Map<String, CompanionConfig.HudWidgetPosition> positionOverrides) {
+        renderHudWidgetPanels(drawContext, true, positionOverrides);
+    }
+
+    public synchronized List<HudWidgetPanel> collectHudWidgetPanelsForEditor(
+            int screenWidth,
+            int screenHeight,
+            Map<String, CompanionConfig.HudWidgetPosition> positionOverrides) {
+        return collectHudWidgetPanels(screenWidth, screenHeight, true, positionOverrides);
+    }
+
+    private void renderHotbarOverlays(DrawContext drawContext) {
         MinecraftClient client = MinecraftClient.getInstance();
         TextRenderer textRenderer = client.textRenderer;
 
@@ -674,6 +897,335 @@ public final class CompanionClientRuntime {
             int slotX = centerX - 90 + (slot * 20) + 2;
             drawOverlayText(drawContext, slotX, slotY, overlayEntry);
         }
+    }
+
+    private void renderHudWidgetPanels(
+            DrawContext drawContext,
+            boolean editorMode,
+            Map<String, CompanionConfig.HudWidgetPosition> positionOverrides) {
+        TextRenderer textRenderer = MinecraftClient.getInstance().textRenderer;
+        if (textRenderer == null) {
+            return;
+        }
+
+        List<HudWidgetPanel> panels =
+                collectHudWidgetPanels(
+                        drawContext.getScaledWindowWidth(),
+                        drawContext.getScaledWindowHeight(),
+                        editorMode,
+                        positionOverrides);
+
+        for (HudWidgetPanel panel : panels) {
+            drawHudWidgetPanel(drawContext, textRenderer, panel, editorMode);
+        }
+    }
+
+    private synchronized List<HudWidgetPanel> collectHudWidgetPanels(
+            int screenWidth,
+            int screenHeight,
+            boolean editorMode,
+            Map<String, CompanionConfig.HudWidgetPosition> positionOverrides) {
+        TextRenderer textRenderer = MinecraftClient.getInstance().textRenderer;
+        if (textRenderer == null || screenWidth <= 0 || screenHeight <= 0) {
+            return List.of();
+        }
+
+        CompanionConfig currentConfig = getConfig();
+        Map<String, ConnectionSessionState.HudWidgetEntry> widgetSnapshot =
+                session.hudWidgetsSnapshot();
+        long now = System.currentTimeMillis();
+        List<HudWidgetPanel> panels = new ArrayList<>();
+
+        for (HudWidgetCatalog.WidgetDescriptor widget : HudWidgetCatalog.widgets()) {
+            if (!editorMode && !shouldRenderWidget(widget.featureId())) {
+                continue;
+            }
+
+            List<String> lines =
+                    resolveWidgetLines(
+                            widget.widgetId(),
+                            widget.previewLines(),
+                            widgetSnapshot,
+                            currentConfig,
+                            now,
+                            editorMode);
+
+            if (lines.isEmpty()) {
+                continue;
+            }
+
+            int titleWidth = textRenderer.getWidth(Text.translatable(widget.titleTranslationKey()));
+            int maxLineWidth = 0;
+            for (String line : lines) {
+                maxLineWidth = Math.max(maxLineWidth, textRenderer.getWidth(line));
+            }
+
+            int desiredWidth =
+                    Math.max(titleWidth, maxLineWidth) + (HUD_PANEL_HORIZONTAL_PADDING * 2);
+            int clampedPanelWidth =
+                    clamp(
+                            desiredWidth,
+                            HUD_PANEL_MIN_WIDTH,
+                            Math.max(
+                                    HUD_PANEL_MIN_WIDTH,
+                                    Math.min(screenWidth - 4, HUD_PANEL_MAX_WIDTH)));
+            int panelHeight =
+                    HUD_PANEL_HEADER_HEIGHT
+                            + (HUD_PANEL_VERTICAL_PADDING * 2)
+                            + (HUD_PANEL_LINE_HEIGHT * lines.size());
+
+            CompanionConfig.HudWidgetPosition position =
+                    resolveWidgetPosition(currentConfig, widget.widgetId(), positionOverrides);
+            int maxX = Math.max(0, screenWidth - clampedPanelWidth);
+            int maxY = Math.max(0, screenHeight - panelHeight);
+            int panelX = clamp((int) Math.round(position.x * maxX), 0, maxX);
+            int panelY = clamp((int) Math.round(position.y * maxY), 0, maxY);
+
+            panels.add(
+                    new HudWidgetPanel(
+                            widget.widgetId(),
+                            widget.titleTranslationKey(),
+                            widget.accentColor(),
+                            panelX,
+                            panelY,
+                            clampedPanelWidth,
+                            panelHeight,
+                            lines));
+        }
+
+        return panels;
+    }
+
+    private List<String> resolveWidgetLines(
+            String widgetId,
+            List<String> previewLines,
+            Map<String, ConnectionSessionState.HudWidgetEntry> widgetSnapshot,
+            CompanionConfig currentConfig,
+            long now,
+            boolean editorMode) {
+        if (!shouldRenderHudWidgets()) {
+            return editorMode ? List.copyOf(previewLines) : List.of();
+        }
+
+        ConnectionSessionState.HudWidgetEntry entry =
+                widgetSnapshot.get(normalizeWidgetId(widgetId));
+        if (entry == null || isHudWidgetExpired(entry, now)) {
+            return editorMode ? List.copyOf(previewLines) : List.of();
+        }
+
+        List<String> lines = new ArrayList<>(entry.lines().size());
+        for (String line : entry.lines()) {
+            if (line != null && !line.isBlank()) {
+                lines.add(line.trim());
+            }
+        }
+
+        if (CompanionConfig.HUD_WIDGET_EVENTS_ID.equals(widgetId)) {
+            lines = resolveEventLines(lines, currentConfig.hudEventVisibility);
+        } else if (CompanionConfig.HUD_WIDGET_COOLDOWNS_ID.equals(widgetId)) {
+            lines.removeIf(line -> !HudWidgetCatalog.isCooldownLineActive(line));
+        }
+
+        if (lines.size() > ProtocolConstants.MAX_WIDGET_LINES) {
+            lines = new ArrayList<>(lines.subList(0, ProtocolConstants.MAX_WIDGET_LINES));
+        }
+
+        if (lines.isEmpty()) {
+            return editorMode ? List.copyOf(previewLines) : List.of();
+        }
+
+        return lines;
+    }
+
+    private static List<String> resolveEventLines(
+            List<String> rawLines, Map<String, Boolean> eventVisibilityConfig) {
+        List<HudWidgetCatalog.ParsedLine> sorted =
+                HudWidgetCatalog.sortEventsClosestFirst(rawLines, eventVisibilityConfig);
+        List<String> lines = new ArrayList<>(sorted.size());
+
+        for (HudWidgetCatalog.ParsedLine parsedLine : sorted) {
+            if (parsedLine.label().isEmpty()) {
+                continue;
+            }
+
+            String text = parsedLine.asText();
+            var descriptor = HudWidgetCatalog.findEventByLabel(parsedLine.label());
+            if (descriptor.isPresent()) {
+                text = "[" + descriptor.orElseThrow().iconTag() + "] " + text;
+            }
+
+            lines.add(text);
+            if (lines.size() >= ProtocolConstants.MAX_WIDGET_LINES) {
+                break;
+            }
+        }
+
+        return lines;
+    }
+
+    private static CompanionConfig.HudWidgetPosition resolveWidgetPosition(
+            CompanionConfig config,
+            String widgetId,
+            Map<String, CompanionConfig.HudWidgetPosition> positionOverrides) {
+        String normalizedWidgetId = normalizeWidgetId(widgetId);
+        CompanionConfig.HudWidgetPosition override = positionOverrides.get(normalizedWidgetId);
+        if (override != null) {
+            return new CompanionConfig.HudWidgetPosition(override.x, override.y);
+        }
+
+        CompanionConfig.HudWidgetPosition configured =
+                config.hudWidgetPositions.get(normalizedWidgetId);
+        if (configured != null) {
+            return new CompanionConfig.HudWidgetPosition(configured.x, configured.y);
+        }
+
+        CompanionConfig.HudWidgetPosition fallback =
+                CompanionConfig.defaults().hudWidgetPositions.get(normalizedWidgetId);
+        if (fallback != null) {
+            return fallback;
+        }
+
+        return new CompanionConfig.HudWidgetPosition(0.5D, 0.5D);
+    }
+
+    private static boolean isHudWidgetExpired(
+            ConnectionSessionState.HudWidgetEntry widget, long now) {
+        int ttlSeconds = widget.ttlSeconds();
+        if (ttlSeconds <= 0) {
+            return false;
+        }
+
+        long expiresAt = widget.receivedAtEpochMillis() + (ttlSeconds * 1000L);
+        return now > expiresAt;
+    }
+
+    private static void drawHudWidgetPanel(
+            DrawContext drawContext,
+            TextRenderer textRenderer,
+            HudWidgetPanel panel,
+            boolean editorMode) {
+        int x = panel.x();
+        int y = panel.y();
+        int right = x + panel.width();
+        int bottom = y + panel.height();
+        int accent = panel.accentColor();
+        int contentTop = y + HUD_PANEL_HEADER_HEIGHT;
+
+        drawContext.fill(x - 1, y - 1, right + 1, bottom + 1, withAlpha(0x000000, 120));
+        drawContext.fill(x, y, right, bottom, withAlpha(0x111826, editorMode ? 206 : 232));
+        drawContext.fill(x, y, right, y + HUD_PANEL_HEADER_HEIGHT, withAlpha(accent, 140));
+        drawContext.fill(x, y, right, y + 1, withAlpha(accent, 255));
+        drawContext.fill(x, bottom - 1, right, bottom, withAlpha(0x384764, 255));
+        drawContext.fill(x, y, x + 1, bottom, withAlpha(0x384764, 255));
+        drawContext.fill(right - 1, y, right, bottom, withAlpha(0x384764, 255));
+
+        drawContext.drawTextWithShadow(
+                textRenderer,
+                Text.translatable(panel.titleTranslationKey()),
+                x + HUD_PANEL_HORIZONTAL_PADDING,
+                y + 4,
+                0xFFFFFFFF);
+
+        int lineY = contentTop + HUD_PANEL_VERTICAL_PADDING;
+        for (String line : panel.lines()) {
+            drawContext.drawTextWithShadow(
+                    textRenderer, line, x + HUD_PANEL_HORIZONTAL_PADDING, lineY, 0xFFE8EDF8);
+            lineY += HUD_PANEL_LINE_HEIGHT;
+        }
+
+        if (editorMode) {
+            drawContext.drawTextWithShadow(
+                    textRenderer,
+                    Text.translatable("text.cosmicprisonsmod.hud.editor.drag_hint"),
+                    right - 52,
+                    y + 4,
+                    withAlpha(0xFFFFFF, 225));
+        }
+    }
+
+    private void processPingKeybinds(MinecraftClient client) {
+        if (gangPingKeyBinding == null || trucePingKeyBinding == null) {
+            return;
+        }
+
+        boolean canSendPings = shouldHandlePingKeybinds(client);
+
+        while (gangPingKeyBinding.wasPressed()) {
+            if (canSendPings) {
+                sendPingIntent(ProtocolConstants.PING_TYPE_GANG);
+            }
+        }
+
+        while (trucePingKeyBinding.wasPressed()) {
+            if (canSendPings) {
+                sendPingIntent(ProtocolConstants.PING_TYPE_TRUCE);
+            }
+        }
+    }
+
+    private void sendPingIntent(int pingType) {
+        sendC2S(new ProtocolMessage.PingIntentC2S(pingType));
+    }
+
+    private void emitPingBeaconParticles(MinecraftClient client) {
+        if (!shouldRenderPingBeacons(client) || client.world == null) {
+            return;
+        }
+
+        if ((client.world.getTime() & 1L) != 0L) {
+            return;
+        }
+
+        renderPingBeaconParticles(
+                client.world,
+                session.gangPingBeaconIdsSnapshot(),
+                ParticleTypes.SOUL_FIRE_FLAME,
+                ParticleTypes.END_ROD);
+        renderPingBeaconParticles(
+                client.world,
+                session.trucePingBeaconIdsSnapshot(),
+                ParticleTypes.FLAME,
+                ParticleTypes.SMALL_FLAME);
+    }
+
+    private static void renderPingBeaconParticles(
+            ClientWorld world,
+            IntSet entityIds,
+            ParticleEffect coreParticle,
+            ParticleEffect orbitParticle) {
+        for (int entityId : entityIds) {
+            Entity entity = world.getEntityById(entityId);
+
+            if (entity == null || entity.isRemoved()) {
+                continue;
+            }
+
+            spawnPingBeaconParticles(world, entity, coreParticle, orbitParticle);
+        }
+    }
+
+    private static void spawnPingBeaconParticles(
+            ClientWorld world,
+            Entity entity,
+            ParticleEffect coreParticle,
+            ParticleEffect orbitParticle) {
+        double baseX = entity.getX();
+        double baseY = entity.getY() + 0.3D;
+        double baseZ = entity.getZ();
+
+        for (int segment = 0; segment < PING_PARTICLE_COLUMN_SEGMENTS; segment++) {
+            double y = baseY + (segment * 0.42D);
+            world.addImportantParticleClient(coreParticle, baseX, y, baseZ, 0.0D, 0.012D, 0.0D);
+
+            double radius = 0.2D + (segment * 0.025D);
+            double angle = (world.getTime() * 0.22D) + (segment * 1.17D) + (entity.getId() * 0.13D);
+            double orbitX = baseX + (Math.cos(angle) * radius);
+            double orbitZ = baseZ + (Math.sin(angle) * radius);
+            world.addParticleClient(orbitParticle, orbitX, y, orbitZ, 0.0D, 0.01D, 0.0D);
+        }
+
+        double topY = baseY + (PING_PARTICLE_COLUMN_SEGMENTS * 0.42D) + 0.2D;
+        world.addImportantParticleClient(orbitParticle, baseX, topY, baseZ, 0.0D, 0.02D, 0.0D);
     }
 
     private synchronized void attemptSendClientHello(MinecraftClient client) {
@@ -738,6 +1290,18 @@ public final class CompanionClientRuntime {
         }
     }
 
+    private void initializePingKeybinds() {
+        if (gangPingKeyBinding == null) {
+            gangPingKeyBinding =
+                    registerPingKeybind("key.cosmicprisonsmod.ping.gang", GLFW.GLFW_KEY_G);
+        }
+
+        if (trucePingKeyBinding == null) {
+            trucePingKeyBinding =
+                    registerPingKeybind("key.cosmicprisonsmod.ping.truce", GLFW.GLFW_KEY_H);
+        }
+    }
+
     private CompanionConfig getConfig() {
         if (config == null) {
             config = configManager.getOrLoad();
@@ -776,6 +1340,34 @@ public final class CompanionClientRuntime {
         return session.gateState().isEnabled()
                 && session.inventoryItemOverlaysSupported()
                 && getFeatureToggleState(ClientFeatures.INVENTORY_ITEM_OVERLAYS_ID);
+    }
+
+    private boolean shouldRenderWidget(String featureId) {
+        return getFeatureToggleState(featureId) && isFeatureSupportedByServer(featureId);
+    }
+
+    private boolean shouldRenderHudWidgets() {
+        return session.gateState().isEnabled() && session.hudWidgetsSupported();
+    }
+
+    private boolean shouldHandlePingKeybinds(MinecraftClient client) {
+        return client != null
+                && client.player != null
+                && client.currentScreen == null
+                && isGangTrucePingsFeatureEnabled();
+    }
+
+    private boolean shouldRenderPingBeacons(MinecraftClient client) {
+        return client != null
+                && client.player != null
+                && client.world != null
+                && isGangTrucePingsFeatureEnabled();
+    }
+
+    private boolean isGangTrucePingsFeatureEnabled() {
+        return session.gateState().isEnabled()
+                && isFeatureSupportedByServer(ClientFeatures.PINGS_ID)
+                && getFeatureToggleState(ClientFeatures.PINGS_ID);
     }
 
     private boolean shouldApplyPeacefulMiningPassThrough(MinecraftClient client) {
@@ -858,6 +1450,50 @@ public final class CompanionClientRuntime {
         };
     }
 
+    private static int clamp(int value, int min, int max) {
+        if (value < min) {
+            return min;
+        }
+        if (value > max) {
+            return max;
+        }
+        return value;
+    }
+
+    private static String normalizeWidgetId(String widgetId) {
+        if (widgetId == null) {
+            return "";
+        }
+        return widgetId.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private static int withAlpha(int rgb, int alpha) {
+        return ((alpha & 0xFF) << 24) | (rgb & 0x00FFFFFF);
+    }
+
+    private static KeyBinding registerPingKeybind(String translationKey, int defaultKeyCode) {
+        return KeyBindingHelper.registerKeyBinding(
+                new KeyBinding(
+                        translationKey,
+                        InputUtil.Type.KEYSYM,
+                        defaultKeyCode,
+                        PING_KEYBIND_CATEGORY));
+    }
+
+    private static void bindKey(KeyBinding keyBinding, KeyInput keyInput) {
+        keyBinding.setBoundKey(InputUtil.fromKeyCode(keyInput));
+        KeyBinding.updateKeysByCode();
+        persistGameOptions();
+    }
+
+    private static void persistGameOptions() {
+        MinecraftClient client = MinecraftClient.getInstance();
+
+        if (client.options != null) {
+            client.options.write();
+        }
+    }
+
     private static void sendClientMessage(MinecraftClient client, Text text) {
         if (client.player != null) {
             client.player.sendMessage(text, false);
@@ -869,6 +1505,20 @@ public final class CompanionClientRuntime {
                 .getModContainer(CosmicPrisonsMod.MOD_ID)
                 .map(modContainer -> modContainer.getMetadata().getVersion().getFriendlyString())
                 .orElse("unknown");
+    }
+
+    public record HudWidgetPanel(
+            String widgetId,
+            String titleTranslationKey,
+            int accentColor,
+            int x,
+            int y,
+            int width,
+            int height,
+            List<String> lines) {
+        public HudWidgetPanel {
+            lines = List.copyOf(lines);
+        }
     }
 
     private record KnownOverlayStack(
