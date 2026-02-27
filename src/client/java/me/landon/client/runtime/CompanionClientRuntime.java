@@ -4197,9 +4197,11 @@ public final class CompanionClientRuntime {
                 return buildId;
             }
 
-            String attestedModVersion = sanitizeVersionToken(attestation.modVersion());
-            if (!attestedModVersion.isBlank()) {
-                return attestedModVersion;
+            if (attestation.isSigned()) {
+                String attestedModVersion = sanitizeVersionToken(attestation.modVersion());
+                if (!attestedModVersion.isBlank()) {
+                    return attestedModVersion;
+                }
             }
         }
 
