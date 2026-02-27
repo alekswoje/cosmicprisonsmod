@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "cosmicprisonsmod",
+  "version": "${version}",
+  "name": "CosmicPrisonsMod",
+  "description": "",
+  "authors": [],
+  "contact": {},
+  "license": "All-Rights-Reserved",
+  "icon": "assets/cosmicprisonsmod/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "fabric-datagen": [
+      "me.landon.client.CosmicPrisonsModDataGenerator"
+    ],
+    "client": [
+      "me.landon.client.CosmicPrisonsModClient"
+    ],
+    "main": [
+      "me.landon.CosmicPrisonsMod"
+    ]
+  },
+  "mixins": [
+    "cosmicprisonsmod.mixins.json",
+    {
+      "config": "cosmicprisonsmod.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric-api": "*",
+    "minecraft": "${minecraft_version}"
+  }
+}
