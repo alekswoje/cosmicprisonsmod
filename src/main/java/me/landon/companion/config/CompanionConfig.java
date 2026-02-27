@@ -20,6 +20,7 @@ public final class CompanionConfig {
     public static final String HUD_WIDGET_LEADERBOARD_BLOCKS_ID = "leaderboard_blocks";
     public static final String HUD_WIDGET_LEADERBOARD_LEVEL_ID = "leaderboard_level";
     public static final String HUD_WIDGET_LEADERBOARD_CYCLE_ID = "leaderboard_cycle";
+    public static final String HUD_EVENT_METEORITE = "meteorite";
     public static final String HUD_EVENT_METEOR = "meteor";
     public static final String HUD_EVENT_ALTAR_SPAWN = "altar_spawn";
     public static final String HUD_EVENT_KOTH = "koth";
@@ -31,6 +32,7 @@ public final class CompanionConfig {
     public static final String HUD_EVENT_NEXT_LEVEL_CAP_UNLOCK = "next_level_cap_day_unlock";
     public static final List<String> HUD_EVENT_KEYS =
             List.of(
+                    HUD_EVENT_METEORITE,
                     HUD_EVENT_METEOR,
                     HUD_EVENT_ALTAR_SPAWN,
                     HUD_EVENT_KOTH,

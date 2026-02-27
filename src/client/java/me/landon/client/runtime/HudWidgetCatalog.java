@@ -165,6 +165,7 @@ public final class HudWidgetCatalog {
 
     private static final List<EventDescriptor> EVENTS_CATALOG =
             List.of(
+                    new EventDescriptor(CompanionConfig.HUD_EVENT_METEORITE, "Meteorite", "MTR"),
                     new EventDescriptor(CompanionConfig.HUD_EVENT_METEOR, "Meteor", "MET"),
                     new EventDescriptor(
                             CompanionConfig.HUD_EVENT_ALTAR_SPAWN, "Altar Spawn", "ALT"),
@@ -288,9 +289,6 @@ public final class HudWidgetCatalog {
 
         for (int index = 0; index < rawLines.size(); index++) {
             ParsedLine parsedLine = splitLine(rawLines.get(index));
-            if ("meteorite".equals(normalizeToken(parsedLine.label()))) {
-                continue;
-            }
             Optional<EventDescriptor> eventDescriptor = findEventByLabel(parsedLine.label());
 
             if (eventDescriptor.isPresent()) {

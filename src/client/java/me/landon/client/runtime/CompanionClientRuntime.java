@@ -1,6 +1,7 @@
 package me.landon.client.runtime;
 
 import it.unimi.dsi.fastutil.ints.IntSet;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -17,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.OptionalDouble;
 import java.util.OptionalLong;
+import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -141,6 +143,9 @@ public final class CompanionClientRuntime {
             Pattern.compile(
                     "\"mod\"\\s*:\\s*\\{[^{}]*\"version\"\\s*:\\s*\"([^\"]+)\"",
                     Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    private static final Pattern RUNTIME_ARTIFACT_VERSION_PATTERN =
+            Pattern.compile(
+                    "(?i)^cosmicprisonsmod[-_]?([vV]?\\d+(?:\\.\\d+){1,3}(?:[-+][A-Za-z0-9._-]+)?)\\.jar$");
     private static final Pattern VERSION_PATTERN =
             Pattern.compile("^[vV]?(\\d+)(?:\\.(\\d+))?(?:\\.(\\d+))?.*$");
 
@@ -2728,6 +2733,7 @@ public final class CompanionClientRuntime {
 
     private static int eventAccentColor(String eventKey, int defaultAccent) {
         return switch (eventKey) {
+            case CompanionConfig.HUD_EVENT_METEORITE -> 0xFFF4AB56;
             case CompanionConfig.HUD_EVENT_METEOR -> 0xFFFF866A;
             case CompanionConfig.HUD_EVENT_ALTAR_SPAWN -> 0xFFB689FF;
             case CompanionConfig.HUD_EVENT_KOTH -> 0xFF7D99FF;
@@ -2743,6 +2749,7 @@ public final class CompanionClientRuntime {
 
     private static Item eventIcon(String eventKey) {
         return switch (eventKey) {
+            case CompanionConfig.HUD_EVENT_METEORITE -> Items.MAGMA_BLOCK;
             case CompanionConfig.HUD_EVENT_METEOR -> Items.FIRE_CHARGE;
             case CompanionConfig.HUD_EVENT_ALTAR_SPAWN -> Items.ENCHANTING_TABLE;
             case CompanionConfig.HUD_EVENT_KOTH -> Items.NETHER_STAR;
@@ -3136,15 +3143,50 @@ public final class CompanionClientRuntime {
         drawMiniItem(drawContext, Items.NETHER_STAR, leftSegmentX + 2, rowY + 2);
         drawMiniItem(drawContext, Items.GOLD_INGOT, rightSegmentX + 2, rowY + 2);
 
+        String formattedPoints = formatGangMetricValue(pointsValue, false);
+        String formattedBank = formatGangMetricValue(bankValue, true);
         String leftText =
-                textRenderer.trimToWidth("Pts " + pointsValue, Math.max(8, segmentWidth - 12));
+                textRenderer.trimToWidth(formattedPoints, Math.max(8, segmentWidth - 16));
         String rightText =
-                textRenderer.trimToWidth("Bank " + bankValue, Math.max(8, segmentWidth - 12));
+                textRenderer.trimToWidth("Bank " + formattedBank, Math.max(8, segmentWidth - 16));
         drawContext.drawTextWithShadow(
-                textRenderer, leftText, leftSegmentX + 10, rowY + 2, 0xFFD6F4C8);
+                textRenderer, leftText, leftSegmentX + 14, rowY + 2, 0xFFD6F4C8);
         drawContext.drawTextWithShadow(
-                textRenderer, rightText, rightSegmentX + 10, rowY + 2, 0xFFF7D8A8);
+                textRenderer, rightText, rightSegmentX + 14, rowY + 2, 0xFFF7D8A8);
         return true;
+    }
+
+    private static String formatGangMetricValue(String rawValue, boolean preferCurrency) {
+        if (rawValue == null || rawValue.isBlank()) {
+            return "";
+        }
+
+        String cleaned = rawValue.replace("|", "").trim();
+        if (cleaned.isEmpty()) {
+            return "";
+        }
+
+        boolean hasGpSuffix = normalizeStatusToken(cleaned).endsWith(" gp");
+        if (hasGpSuffix && cleaned.length() > 3) {
+            cleaned = cleaned.substring(0, cleaned.length() - 3).trim();
+        }
+
+        boolean hasDollarPrefix = cleaned.startsWith("$");
+        String numericCandidate = hasDollarPrefix ? cleaned.substring(1).trim() : cleaned;
+        OptionalDouble parsedValue = parseLeaderboardValue(numericCandidate, true);
+        if (parsedValue.isEmpty()) {
+            return rawValue.trim();
+        }
+
+        long rounded = Math.max(0L, Math.round(parsedValue.orElse(0.0D)));
+        String grouped = String.format(java.util.Locale.US, "%,d", rounded);
+        if (preferCurrency || hasDollarPrefix) {
+            return "$" + grouped;
+        }
+        if (hasGpSuffix) {
+            return grouped + " GP";
+        }
+        return grouped;
     }
 
     private static void drawMiniItem(DrawContext drawContext, Item item, int x, int y) {
@@ -3411,7 +3453,7 @@ public final class CompanionClientRuntime {
             return cooldownMode ? "--" : "N/A";
         }
         if ("not scheduled".equals(normalized)) {
-            return "No plan";
+            return "Not Scheduled";
         }
         if ("max day".equals(normalized)) {
             return "MAX";
@@ -4162,7 +4204,62 @@ public final class CompanionClientRuntime {
             }
         }
 
+        String artifactVersion = resolveRuntimeArtifactVersion();
+        if (!artifactVersion.isBlank()) {
+            return artifactVersion;
+        }
+
+        String embeddedVersion = resolveEmbeddedBuildVersion();
+        if (!embeddedVersion.isBlank()) {
+            return embeddedVersion;
+        }
+
         return resolveModVersion();
+    }
+
+    private String resolveRuntimeArtifactVersion() {
+        try {
+            Path artifactPath =
+                    Path.of(
+                            CompanionClientRuntime.class
+                                    .getProtectionDomain()
+                                    .getCodeSource()
+                                    .getLocation()
+                                    .toURI());
+            String fileName =
+                    artifactPath.getFileName() == null ? "" : artifactPath.getFileName().toString();
+            Matcher matcher = RUNTIME_ARTIFACT_VERSION_PATTERN.matcher(fileName);
+            if (!matcher.matches()) {
+                return "";
+            }
+            return sanitizeVersionToken(matcher.group(1));
+        } catch (Exception ex) {
+            LOGGER.debug("Failed to resolve runtime artifact version: {}", ex.getMessage());
+            return "";
+        }
+    }
+
+    private String resolveEmbeddedBuildVersion() {
+        try (InputStream input =
+                CompanionClientRuntime.class
+                        .getClassLoader()
+                        .getResourceAsStream("official-build.properties")) {
+            if (input == null) {
+                return "";
+            }
+
+            Properties properties = new Properties();
+            properties.load(input);
+            String buildId = sanitizeVersionToken(properties.getProperty("buildId"));
+            if (!buildId.isBlank()) {
+                return buildId;
+            }
+
+            return sanitizeVersionToken(properties.getProperty("modVersion"));
+        } catch (Exception ex) {
+            LOGGER.debug("Failed to resolve embedded build version: {}", ex.getMessage());
+            return "";
+        }
     }
 
     private static String sanitizeVersionToken(String rawVersion) {
