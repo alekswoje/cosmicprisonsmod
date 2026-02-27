@@ -32,6 +32,8 @@ public final class ProtocolConstants {
     public static final int MARKER_TYPE_TRUCE_PING_BEACON = 4;
     public static final int OVERLAY_TYPE_COSMIC_ENERGY = 1;
     public static final int OVERLAY_TYPE_MONEY_NOTE = 2;
+    public static final int OVERLAY_TYPE_GANG_POINT_NOTE = 3;
+    public static final int OVERLAY_TYPE_SATCHEL_PERCENT = 4;
     public static final int CLIENT_HELLO_RETRY_TICKS = 60;
 
     private ProtocolConstants() {}

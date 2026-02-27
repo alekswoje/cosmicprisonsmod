@@ -10,7 +10,7 @@ import org.lwjgl.glfw.GLFW;
 
 public final class PingKeybindSettingsScreen extends Screen {
     private static final int ROW_HEIGHT = 28;
-    private static final int LIST_TOP = 54;
+    private static final int LIST_TOP = 56;
 
     private final CompanionClientRuntime runtime;
     private final Screen parent;
@@ -46,7 +46,10 @@ public final class PingKeybindSettingsScreen extends Screen {
                                         rowX + rowWidth - 128, LIST_TOP + ROW_HEIGHT + 4, 120, 20)
                                 .build());
 
-        int footerY = LIST_TOP + (ROW_HEIGHT * 2) + 18;
+        int footerY = LIST_TOP + (ROW_HEIGHT * 2) + 20;
+        int footerButtonWidth = 120;
+        int footerGap = 8;
+        int footerStartX = (width - ((footerButtonWidth * 2) + footerGap)) / 2;
         addDrawableChild(
                 ButtonWidget.builder(
                                 Text.translatable("text.cosmicprisonsmod.ping_keys.reset_button"),
@@ -55,13 +58,17 @@ public final class PingKeybindSettingsScreen extends Screen {
                                     captureTarget = CaptureTarget.NONE;
                                     refreshButtonLabels();
                                 })
-                        .dimensions((width / 2) - 124, footerY, 120, 20)
+                        .dimensions(footerStartX, footerY, footerButtonWidth, 20)
                         .build());
         addDrawableChild(
                 ButtonWidget.builder(
                                 Text.translatable("text.cosmicprisonsmod.settings.button.done"),
                                 button -> close())
-                        .dimensions((width / 2) + 4, footerY, 120, 20)
+                        .dimensions(
+                                footerStartX + footerButtonWidth + footerGap,
+                                footerY,
+                                footerButtonWidth,
+                                20)
                         .build());
 
         refreshButtonLabels();
@@ -105,20 +112,20 @@ public final class PingKeybindSettingsScreen extends Screen {
     @Override
     public void render(DrawContext drawContext, int mouseX, int mouseY, float deltaTicks) {
         drawContext.fill(0, 0, width, height, 0xBF0E131D);
-        drawContext.fill(0, 0, width, 28, 0x6B273D5C);
-        drawContext.drawCenteredTextWithShadow(textRenderer, title, width / 2, 9, 0xFFFFFFFF);
+        drawContext.fill(0, 0, width, 32, 0x6B273D5C);
+        drawContext.drawCenteredTextWithShadow(textRenderer, title, width / 2, 11, 0xFFFFFFFF);
         drawContext.drawCenteredTextWithShadow(
                 textRenderer,
                 Text.translatable("text.cosmicprisonsmod.ping_keys.subtitle"),
                 width / 2,
-                32,
+                36,
                 0xFFB8C7DA);
         renderRows(drawContext);
         drawContext.drawCenteredTextWithShadow(
                 textRenderer,
                 Text.translatable("text.cosmicprisonsmod.ping_keys.capture_hint"),
                 width / 2,
-                LIST_TOP + (ROW_HEIGHT * 2) + 4,
+                LIST_TOP + (ROW_HEIGHT * 2) + 6,
                 0xFFC6D4E8);
         super.render(drawContext, mouseX, mouseY, deltaTicks);
     }

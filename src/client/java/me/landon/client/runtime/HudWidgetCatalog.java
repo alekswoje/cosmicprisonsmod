@@ -61,8 +61,92 @@ public final class HudWidgetCatalog {
                     "text.cosmicprisonsmod.hud.satchels.title",
                     0x6CE39B,
                     List.of("Coal: 412K/1.2M x2", "Gold: 84K/400K x1"));
+    private static final WidgetDescriptor GANG =
+            new WidgetDescriptor(
+                    CompanionConfig.HUD_WIDGET_GANG_ID,
+                    ClientFeatures.HUD_GANG_ID,
+                    "text.cosmicprisonsmod.hud.gang.title",
+                    0xFF8E63,
+                    List.of(
+                            "Astral Gang",
+                            "Online (5):",
+                            "[LDR] Landon (1h 12m)",
+                            "[MOD] Nova (43m)",
+                            "Offline (7):",
+                            "[MEM] Helix",
+                            "Points: 1.4B | Bank: 320M",
+                            "Members: 12 | Truces: 4",
+                            "Target: Cell 27"));
+    private static final WidgetDescriptor LEADERBOARD_GIFT =
+            new WidgetDescriptor(
+                    CompanionConfig.HUD_WIDGET_LEADERBOARD_GIFT_ID,
+                    ClientFeatures.HUD_LEADERBOARDS_ID,
+                    "text.cosmicprisonsmod.hud.leaderboard_gift.title",
+                    0xFFC97B,
+                    List.of(
+                            "Gift Top",
+                            "#1 Landon - 24",
+                            "#2 Nova - 21",
+                            "#3 Helix - 18",
+                            "#4 Orion - 15"));
+    private static final WidgetDescriptor LEADERBOARD_GANG =
+            new WidgetDescriptor(
+                    CompanionConfig.HUD_WIDGET_LEADERBOARD_GANG_ID,
+                    ClientFeatures.HUD_LEADERBOARDS_ID,
+                    "text.cosmicprisonsmod.hud.leaderboard_gang.title",
+                    0xFF84A3FF,
+                    List.of(
+                            "Gang Top",
+                            "#1 Astral - 9.2B",
+                            "#2 Nexus - 8.7B",
+                            "#3 Ember - 8.1B",
+                            "#4 Vanta - 7.9B"));
+    private static final WidgetDescriptor LEADERBOARD_BLOCKS =
+            new WidgetDescriptor(
+                    CompanionConfig.HUD_WIDGET_LEADERBOARD_BLOCKS_ID,
+                    ClientFeatures.HUD_LEADERBOARDS_ID,
+                    "text.cosmicprisonsmod.hud.leaderboard_blocks.title",
+                    0xFF7FD8A7,
+                    List.of(
+                            "Blocks Top",
+                            "#1 Landon - 2.1M",
+                            "#2 Nova - 1.9M",
+                            "#3 Helix - 1.8M",
+                            "#4 Orion - 1.7M"));
+    private static final WidgetDescriptor LEADERBOARD_LEVEL =
+            new WidgetDescriptor(
+                    CompanionConfig.HUD_WIDGET_LEADERBOARD_LEVEL_ID,
+                    ClientFeatures.HUD_LEADERBOARDS_ID,
+                    "text.cosmicprisonsmod.hud.leaderboard_level.title",
+                    0xFFBC9DFF,
+                    List.of(
+                            "Level Top",
+                            "#1 Landon - 112",
+                            "#2 Nova - 110",
+                            "#3 Helix - 108",
+                            "#4 Orion - 107"));
+    private static final WidgetDescriptor LEADERBOARD_CYCLE =
+            new WidgetDescriptor(
+                    CompanionConfig.HUD_WIDGET_LEADERBOARD_CYCLE_ID,
+                    ClientFeatures.HUD_LEADERBOARDS_ID,
+                    "text.cosmicprisonsmod.hud.leaderboard_cycle.title",
+                    0xFF9AB1D9,
+                    LEADERBOARD_GIFT.previewLines());
 
-    private static final List<WidgetDescriptor> WIDGETS = List.of(COOLDOWNS, EVENTS, SATCHELS);
+    private static final List<WidgetDescriptor> LEADERBOARDS =
+            List.of(LEADERBOARD_GIFT, LEADERBOARD_GANG, LEADERBOARD_BLOCKS, LEADERBOARD_LEVEL);
+
+    private static final List<WidgetDescriptor> WIDGETS =
+            List.of(
+                    COOLDOWNS,
+                    EVENTS,
+                    SATCHELS,
+                    GANG,
+                    LEADERBOARD_GIFT,
+                    LEADERBOARD_GANG,
+                    LEADERBOARD_BLOCKS,
+                    LEADERBOARD_LEVEL,
+                    LEADERBOARD_CYCLE);
 
     private static final Map<String, WidgetDescriptor> WIDGETS_BY_ID = buildWidgetsById(WIDGETS);
 
@@ -103,6 +187,35 @@ public final class HudWidgetCatalog {
             return Optional.empty();
         }
         return Optional.ofNullable(WIDGETS_BY_ID.get(normalizeToken(widgetId)));
+    }
+
+    public static List<WidgetDescriptor> leaderboardWidgets() {
+        return LEADERBOARDS;
+    }
+
+    public static Optional<WidgetDescriptor> findLeaderboardWidget(String widgetId) {
+        if (widgetId == null) {
+            return Optional.empty();
+        }
+        for (WidgetDescriptor descriptor : LEADERBOARDS) {
+            if (normalizeToken(descriptor.widgetId()).equals(normalizeToken(widgetId))) {
+                return Optional.of(descriptor);
+            }
+        }
+        return Optional.empty();
+    }
+
+    public static WidgetDescriptor leaderboardCycleWidget() {
+        return LEADERBOARD_CYCLE;
+    }
+
+    public static boolean isLeaderboardWidget(String widgetId) {
+        return findLeaderboardWidget(widgetId).isPresent();
+    }
+
+    public static boolean isLeaderboardCycleWidget(String widgetId) {
+        return normalizeToken(CompanionConfig.HUD_WIDGET_LEADERBOARD_CYCLE_ID)
+                .equals(normalizeToken(widgetId));
     }
 
     public static List<EventDescriptor> eventDescriptors() {

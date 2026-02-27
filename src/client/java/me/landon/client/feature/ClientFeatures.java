@@ -56,6 +56,26 @@ public final class ClientFeatures {
                     true,
                     OptionalInt.of(ProtocolConstants.SERVER_FEATURE_HUD_WIDGETS));
 
+    public static final String HUD_GANG_ID = "hud_gang";
+    public static final ClientFeatureDefinition HUD_GANG =
+            new ClientFeatureDefinition(
+                    HUD_GANG_ID,
+                    "text.cosmicprisonsmod.feature.hud_gang.name",
+                    "text.cosmicprisonsmod.feature.hud_gang.icon",
+                    "text.cosmicprisonsmod.feature.hud_gang.description",
+                    true,
+                    OptionalInt.of(ProtocolConstants.SERVER_FEATURE_HUD_WIDGETS));
+
+    public static final String HUD_LEADERBOARDS_ID = "hud_leaderboards";
+    public static final ClientFeatureDefinition HUD_LEADERBOARDS =
+            new ClientFeatureDefinition(
+                    HUD_LEADERBOARDS_ID,
+                    "text.cosmicprisonsmod.feature.hud_leaderboards.name",
+                    "text.cosmicprisonsmod.feature.hud_leaderboards.icon",
+                    "text.cosmicprisonsmod.feature.hud_leaderboards.description",
+                    true,
+                    OptionalInt.of(ProtocolConstants.SERVER_FEATURE_HUD_WIDGETS));
+
     public static final String PINGS_ID = "pings";
     public static final ClientFeatureDefinition PINGS =
             new ClientFeatureDefinition(
@@ -73,6 +93,8 @@ public final class ClientFeatures {
                     HUD_COOLDOWNS,
                     HUD_EVENTS,
                     HUD_SATCHEL_DISPLAY,
+                    HUD_GANG,
+                    HUD_LEADERBOARDS,
                     PINGS);
 
     private ClientFeatures() {}

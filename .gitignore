@@ -110,6 +110,26 @@ release/
 release-assets/
 dist/
 
+# Signing / attestation secrets (never commit)
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+*.crt
+*.cer
+*.der
+*.pk8
+*.env
+*.env.*
+.env
+.env.*
+official-build.properties
+**/official-build.properties
+keys/
+secrets/
+
 # Ignore Gradle GUI config
 gradle-app.setting
 

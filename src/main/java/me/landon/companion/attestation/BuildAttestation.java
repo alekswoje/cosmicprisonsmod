@@ -32,6 +32,8 @@ public final class BuildAttestation {
                 + ";iat="
                 + issuedAt
                 + ";sig="
+                + signature
+                + ";signature="
                 + signature;
     }
 

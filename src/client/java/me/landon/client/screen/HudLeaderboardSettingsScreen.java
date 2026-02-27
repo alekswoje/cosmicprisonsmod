@@ -11,25 +11,23 @@ import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.text.Text;
 
-public final class HudEventVisibilityScreen extends Screen {
+public final class HudLeaderboardSettingsScreen extends Screen {
     private static final int PANEL_TOP = 50;
     private static final int PANEL_BOTTOM_MARGIN = 24;
     private static final int PANEL_HORIZONTAL_MARGIN = 22;
-    private static final int MODE_SECTION_HEIGHT = 34;
+    private static final int MODE_SECTION_HEIGHT = 36;
     private static final int ROW_HEIGHT = 26;
 
     private final CompanionClientRuntime runtime;
     private final Screen parent;
-    private final List<ButtonWidget> toggleButtons = new ArrayList<>();
+    private final List<ButtonWidget> visibilityButtons = new ArrayList<>();
 
-    private Map<String, Boolean> visibility = Map.of();
-    private boolean eventsCompactMode;
-    private boolean satchelsCompactMode;
-    private ButtonWidget eventsModeButton;
-    private ButtonWidget satchelModeButton;
+    private Map<String, Boolean> visibilityByWidget = Map.of();
+    private boolean compactMode;
+    private boolean cycleMode;
 
-    public HudEventVisibilityScreen(CompanionClientRuntime runtime, Screen parent) {
-        super(Text.translatable("text.cosmicprisonsmod.events_filter.title"));
+    public HudLeaderboardSettingsScreen(CompanionClientRuntime runtime, Screen parent) {
+        super(Text.translatable("text.cosmicprisonsmod.leaderboards_filter.title"));
         this.runtime = runtime;
         this.parent = parent;
     }
@@ -38,10 +36,10 @@ public final class HudEventVisibilityScreen extends Screen {
     protected void init() {
         super.init();
 
-        visibility = new LinkedHashMap<>(runtime.getHudEventVisibilitySnapshot());
-        eventsCompactMode = runtime.isHudEventsCompactMode();
-        satchelsCompactMode = runtime.isHudSatchelsCompactMode();
-        toggleButtons.clear();
+        visibilityByWidget = new LinkedHashMap<>(runtime.getHudLeaderboardVisibilitySnapshot());
+        compactMode = runtime.isHudLeaderboardsCompactMode();
+        cycleMode = runtime.isHudLeaderboardsCycleMode();
+        visibilityButtons.clear();
 
         int panelX = panelX();
         int panelWidth = panelWidth();
@@ -50,39 +48,35 @@ public final class HudEventVisibilityScreen extends Screen {
         int modeGap = 12;
         int modeStartX = panelX + ((panelWidth - ((modeButtonWidth * 2) + modeGap)) / 2);
 
-        eventsModeButton =
-                addDrawableChild(
-                        ButtonWidget.builder(eventsModeText(), button -> toggleEventsMode(button))
-                                .dimensions(modeStartX, modeY, modeButtonWidth, 20)
-                                .build());
-        satchelModeButton =
-                addDrawableChild(
-                        ButtonWidget.builder(
-                                        satchelsModeText(), button -> toggleSatchelMode(button))
-                                .dimensions(
-                                        modeStartX + modeButtonWidth + modeGap,
-                                        modeY,
-                                        modeButtonWidth,
-                                        20)
-                                .build());
+        addDrawableChild(
+                ButtonWidget.builder(modeLayoutText(), button -> toggleCycleMode(button))
+                        .dimensions(modeStartX, modeY, modeButtonWidth, 20)
+                        .build());
+        addDrawableChild(
+                ButtonWidget.builder(modeCompactText(), button -> toggleCompactMode(button))
+                        .dimensions(
+                                modeStartX + modeButtonWidth + modeGap, modeY, modeButtonWidth, 20)
+                        .build());
 
         int rowsTop = rowsTop();
         int toggleWidth = 86;
         int buttonX = panelX + panelWidth - toggleWidth - 12;
 
-        for (int index = 0; index < HudWidgetCatalog.eventDescriptors().size(); index++) {
-            HudWidgetCatalog.EventDescriptor descriptor =
-                    HudWidgetCatalog.eventDescriptors().get(index);
+        for (int index = 0; index < HudWidgetCatalog.leaderboardWidgets().size(); index++) {
+            HudWidgetCatalog.WidgetDescriptor descriptor =
+                    HudWidgetCatalog.leaderboardWidgets().get(index);
             int rowY = rowsTop + (index * ROW_HEIGHT);
 
             ButtonWidget toggleButton =
                     addDrawableChild(
                             ButtonWidget.builder(
-                                            toggleText(descriptor.key()),
-                                            button -> toggleEvent(descriptor.key(), button))
+                                            toggleText(descriptor.widgetId()),
+                                            button ->
+                                                    toggleLeaderboard(
+                                                            descriptor.widgetId(), button))
                                     .dimensions(buttonX, rowY + 3, toggleWidth, 20)
                                     .build());
-            toggleButtons.add(toggleButton);
+            visibilityButtons.add(toggleButton);
         }
 
         addDrawableChild(
@@ -108,7 +102,7 @@ public final class HudEventVisibilityScreen extends Screen {
         drawContext.drawCenteredTextWithShadow(textRenderer, title, width / 2, 11, 0xFFFFFFFF);
         drawContext.drawCenteredTextWithShadow(
                 textRenderer,
-                Text.translatable("text.cosmicprisonsmod.events_filter.subtitle"),
+                Text.translatable("text.cosmicprisonsmod.leaderboards_filter.subtitle"),
                 width / 2,
                 36,
                 0xFFD1DEEF);
@@ -139,7 +133,7 @@ public final class HudEventVisibilityScreen extends Screen {
                 0xA9172438);
         drawContext.drawTextWithShadow(
                 textRenderer,
-                Text.translatable("text.cosmicprisonsmod.events_filter.mode.section"),
+                Text.translatable("text.cosmicprisonsmod.leaderboards_filter.mode.section"),
                 panelX + 16,
                 modeContainerY + 4,
                 0xFFD6E6F8);
@@ -150,9 +144,9 @@ public final class HudEventVisibilityScreen extends Screen {
         int panelWidth = panelWidth();
         int rowsTop = rowsTop();
 
-        for (int index = 0; index < HudWidgetCatalog.eventDescriptors().size(); index++) {
-            HudWidgetCatalog.EventDescriptor descriptor =
-                    HudWidgetCatalog.eventDescriptors().get(index);
+        for (int index = 0; index < HudWidgetCatalog.leaderboardWidgets().size(); index++) {
+            HudWidgetCatalog.WidgetDescriptor descriptor =
+                    HudWidgetCatalog.leaderboardWidgets().get(index);
             int rowY = rowsTop + (index * ROW_HEIGHT);
             int rowBottom = rowY + ROW_HEIGHT - 2;
             int rowColor = (index % 2 == 0) ? 0x9F15253A : 0x9F111F32;
@@ -160,49 +154,50 @@ public final class HudEventVisibilityScreen extends Screen {
             drawContext.fill(panelX + 10, rowY, panelX + panelWidth - 10, rowBottom, rowColor);
             drawContext.fill(panelX + 10, rowY, panelX + panelWidth - 10, rowY + 1, 0xFF314A69);
 
-            String label = "[" + descriptor.iconTag() + "] " + descriptor.label();
+            String label = Text.translatable(descriptor.titleTranslationKey()).getString();
             drawContext.drawTextWithShadow(textRenderer, label, panelX + 18, rowY + 8, 0xFFE8F0FA);
         }
     }
 
-    private void toggleEvent(String eventKey, ButtonWidget button) {
-        boolean nowVisible = !Boolean.TRUE.equals(visibility.get(eventKey));
-        visibility.put(eventKey, nowVisible);
-        runtime.setHudEventVisibility(eventKey, nowVisible);
-        button.setMessage(toggleText(eventKey));
+    private void toggleLeaderboard(String widgetId, ButtonWidget button) {
+        boolean nowVisible = !Boolean.TRUE.equals(visibilityByWidget.get(widgetId));
+        visibilityByWidget.put(widgetId, nowVisible);
+        runtime.setHudLeaderboardVisibility(widgetId, nowVisible);
+        button.setMessage(toggleText(widgetId));
     }
 
-    private void toggleEventsMode(ButtonWidget button) {
-        eventsCompactMode = !eventsCompactMode;
-        runtime.setHudEventsCompactMode(eventsCompactMode);
-        button.setMessage(eventsModeText());
+    private void toggleCycleMode(ButtonWidget button) {
+        cycleMode = !cycleMode;
+        runtime.setHudLeaderboardsCycleMode(cycleMode);
+        button.setMessage(modeLayoutText());
     }
 
-    private void toggleSatchelMode(ButtonWidget button) {
-        satchelsCompactMode = !satchelsCompactMode;
-        runtime.setHudSatchelsCompactMode(satchelsCompactMode);
-        button.setMessage(satchelsModeText());
+    private void toggleCompactMode(ButtonWidget button) {
+        compactMode = !compactMode;
+        runtime.setHudLeaderboardsCompactMode(compactMode);
+        button.setMessage(modeCompactText());
     }
 
-    private Text toggleText(String eventKey) {
-        boolean visible = Boolean.TRUE.equals(visibility.get(eventKey));
+    private Text toggleText(String widgetId) {
+        boolean visible = Boolean.TRUE.equals(visibilityByWidget.get(widgetId));
         return visible
                 ? Text.translatable("text.cosmicprisonsmod.settings.toggle.on")
                 : Text.translatable("text.cosmicprisonsmod.settings.toggle.off");
     }
 
-    private Text eventsModeText() {
+    private Text modeLayoutText() {
         return Text.translatable(
-                "text.cosmicprisonsmod.events_filter.mode.events",
-                eventsCompactMode
-                        ? Text.translatable("text.cosmicprisonsmod.events_filter.mode.compact")
-                        : Text.translatable("text.cosmicprisonsmod.events_filter.mode.full"));
+                "text.cosmicprisonsmod.leaderboards_filter.mode.layout",
+                cycleMode
+                        ? Text.translatable("text.cosmicprisonsmod.leaderboards_filter.mode.cycle")
+                        : Text.translatable(
+                                "text.cosmicprisonsmod.leaderboards_filter.mode.individual"));
     }
 
-    private Text satchelsModeText() {
+    private Text modeCompactText() {
         return Text.translatable(
-                "text.cosmicprisonsmod.events_filter.mode.satchels",
-                satchelsCompactMode
+                "text.cosmicprisonsmod.leaderboards_filter.mode.compact",
+                compactMode
                         ? Text.translatable("text.cosmicprisonsmod.events_filter.mode.compact")
                         : Text.translatable("text.cosmicprisonsmod.events_filter.mode.full"));
     }
