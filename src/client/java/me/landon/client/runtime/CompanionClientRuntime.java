@@ -63,6 +63,7 @@ import net.minecraft.client.gui.screen.GameMenuScreen;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.input.KeyInput;
+import net.minecraft.client.network.ServerInfo;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.render.RenderTickCounter;
 import net.minecraft.client.render.block.entity.BeaconBlockEntityRenderer;
@@ -200,6 +201,8 @@ public final class CompanionClientRuntime {
     private long lastPingFeedbackAtMillis;
     private boolean gangPingKeyWasDown;
     private boolean trucePingKeyWasDown;
+    private boolean outdatedNoticeLeftMouseDown;
+    private String dismissedOutdatedNoticeLatestVersion = "";
     private boolean initialized;
 
     private record PingLabelSnapshot(Vec3d anchorPos, String entityName, float healthValue) {}
@@ -812,23 +815,33 @@ public final class CompanionClientRuntime {
         processPingKeybinds(client);
         emitPingBeaconParticles(client);
 
-        if (!session.helloSent() && helloRetryTicks > 0) {
+        if (!session.helloSent() && helloRetryTicks > 0 && isCompanionTargetServer(client)) {
             helloRetryTicks--;
             attemptSendClientHello(client);
         }
     }
 
     private synchronized void onWorldChange(MinecraftClient client, ClientWorld world) {
+        session.clearInventoryItemOverlays();
+        session.clearHudWidgets();
+        session.clearPeacefulMiningPassThroughIds();
+        session.clearGangPingBeaconIds();
+        session.clearTrucePingBeaconIds();
+        clearPingVisualTracking();
+        clearOverlayRenderCaches();
+        clearActivePeacefulMiningTarget();
+
         if (world == null) {
-            session.clearInventoryItemOverlays();
-            session.clearHudWidgets();
-            session.clearPeacefulMiningPassThroughIds();
-            session.clearGangPingBeaconIds();
-            session.clearTrucePingBeaconIds();
-            clearPingVisualTracking();
-            clearOverlayRenderCaches();
-            clearActivePeacefulMiningTarget();
+            return;
         }
+
+        if (session.gateState().isEnabled() || session.helloSent()) {
+            session.reset();
+        }
+
+        helloRetryTicks = ProtocolConstants.CLIENT_HELLO_RETRY_TICKS;
+        helloUnavailableLogged = false;
+        attemptSendClientHello(client);
     }
 
     private synchronized void onScreenAfterInit(
@@ -1266,12 +1279,18 @@ public final class CompanionClientRuntime {
     private void renderOutdatedVersionNotice(DrawContext drawContext) {
         ModUpdateChecker.UpdateNotice notice = modUpdateChecker.notice();
         if (!notice.outdated()) {
+            dismissedOutdatedNoticeLatestVersion = "";
             return;
         }
 
         MinecraftClient client = MinecraftClient.getInstance();
         TextRenderer textRenderer = client.textRenderer;
         if (textRenderer == null) {
+            return;
+        }
+
+        String latestVersionToken = sanitizeVersionToken(notice.latestVersion());
+        if (latestVersionToken.equalsIgnoreCase(dismissedOutdatedNoticeLatestVersion)) {
             return;
         }
 
@@ -1288,11 +1307,25 @@ public final class CompanionClientRuntime {
         int horizontalPadding = 6;
         int verticalPadding = 5;
         int lineGap = 2;
+        int closeSize = 9;
+        int closeInset = 4;
+        int closeGap = 6;
 
         int textWidth = Math.max(textRenderer.getWidth(lineOne), textRenderer.getWidth(lineTwo));
         int textHeight = (textRenderer.fontHeight * 2) + lineGap;
-        int boxWidth = textWidth + (horizontalPadding * 2);
+        int boxWidth = textWidth + (horizontalPadding * 2) + closeSize + closeGap;
         int boxHeight = textHeight + (verticalPadding * 2);
+        int closeMaxX = x + boxWidth - closeInset;
+        int closeMinX = closeMaxX - closeSize;
+        int closeMinY = y + closeInset;
+        int closeMaxY = closeMinY + closeSize;
+        boolean closeHovered =
+                isOutdatedNoticeCloseHovered(client, closeMinX, closeMinY, closeMaxX, closeMaxY);
+
+        if (closeHovered && consumeOutdatedNoticeCloseClick(client)) {
+            dismissedOutdatedNoticeLatestVersion = latestVersionToken;
+            return;
+        }
 
         drawContext.fill(x, y, x + boxWidth, y + boxHeight, withAlpha(0x2D0E12, 224));
         drawContext.fill(x, y, x + boxWidth, y + 1, 0xFFFF5D5D);
@@ -1300,11 +1333,58 @@ public final class CompanionClientRuntime {
         drawContext.fill(x + boxWidth - 1, y, x + boxWidth, y + boxHeight, 0xFF6F2D37);
         drawContext.fill(x, y + boxHeight - 1, x + boxWidth, y + boxHeight, 0xFF6F2D37);
 
+        if (closeHovered) {
+            drawContext.fill(
+                    closeMinX - 1,
+                    closeMinY - 1,
+                    closeMaxX + 1,
+                    closeMaxY + 1,
+                    withAlpha(0x8A2732, 172));
+        }
+
+        drawContext.drawHorizontalLine(closeMinX, closeMaxX, closeMinY, 0xFFFFD0D0);
+        drawContext.drawHorizontalLine(closeMinX, closeMaxX, closeMaxY, 0xFFFFD0D0);
+        drawContext.drawVerticalLine(closeMinX, closeMinY, closeMaxY, 0xFFFFD0D0);
+        drawContext.drawVerticalLine(closeMaxX, closeMinY, closeMaxY, 0xFFFFD0D0);
+        drawContext.drawTextWithShadow(textRenderer, "x", closeMinX + 2, closeMinY, 0xFFFFDCDC);
+
         int textX = x + horizontalPadding;
         int lineOneY = y + verticalPadding;
         int lineTwoY = lineOneY + textRenderer.fontHeight + lineGap;
         drawContext.drawTextWithShadow(textRenderer, lineOne, textX, lineOneY, 0xFFFFDCDC);
         drawContext.drawTextWithShadow(textRenderer, lineTwo, textX, lineTwoY, 0xFFFFB6C1);
+    }
+
+    private boolean consumeOutdatedNoticeCloseClick(MinecraftClient client) {
+        boolean leftDown = isLeftMouseButtonDown(client);
+        boolean clicked = leftDown && !outdatedNoticeLeftMouseDown;
+        outdatedNoticeLeftMouseDown = leftDown;
+        return clicked;
+    }
+
+    private boolean isOutdatedNoticeCloseHovered(
+            MinecraftClient client, int minX, int minY, int maxX, int maxY) {
+        if (client.currentScreen == null) {
+            return false;
+        }
+
+        double scaledMouseX =
+                client.mouse.getX()
+                        * client.getWindow().getScaledWidth()
+                        / client.getWindow().getWidth();
+        double scaledMouseY =
+                client.mouse.getY()
+                        * client.getWindow().getScaledHeight()
+                        / client.getWindow().getHeight();
+        return scaledMouseX >= minX
+                && scaledMouseX <= maxX
+                && scaledMouseY >= minY
+                && scaledMouseY <= maxY;
+    }
+
+    private static boolean isLeftMouseButtonDown(MinecraftClient client) {
+        return GLFW.glfwGetMouseButton(client.getWindow().getHandle(), GLFW.GLFW_MOUSE_BUTTON_LEFT)
+                == GLFW.GLFW_PRESS;
     }
 
     /**
@@ -4165,6 +4245,10 @@ public final class CompanionClientRuntime {
             return;
         }
 
+        if (!isCompanionTargetServer(client)) {
+            return;
+        }
+
         if (!ClientPlayNetworking.canSend(CompanionRawPayload.ID)) {
             if (!helloUnavailableLogged) {
                 helloUnavailableLogged = true;
@@ -4179,12 +4263,15 @@ public final class CompanionClientRuntime {
         ProtocolMessage.ClientHelloC2S hello =
                 new ProtocolMessage.ClientHelloC2S(
                         clientVersionPayload, CLIENT_CAPABILITIES_BITSET);
-        sendC2S(hello);
-        session.markHelloSent();
+        if (sendC2S(hello)) {
+            session.markHelloSent();
+        }
     }
 
     private synchronized boolean sendC2S(ProtocolMessage message) {
-        if (MinecraftClient.getInstance().player == null
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.player == null
+                || !isCompanionTargetServer(client)
                 || !ClientPlayNetworking.canSend(CompanionRawPayload.ID)) {
             return false;
         }
@@ -4192,6 +4279,82 @@ public final class CompanionClientRuntime {
         byte[] bytes = protocolCodec.encode(message);
         ClientPlayNetworking.send(new CompanionRawPayload(bytes));
         return true;
+    }
+
+    private boolean isCompanionTargetServer(MinecraftClient client) {
+        if (client == null) {
+            return false;
+        }
+
+        ServerInfo currentServer = client.getCurrentServerEntry();
+        if (currentServer == null
+                || currentServer.address == null
+                || currentServer.address.isBlank()) {
+            return false;
+        }
+
+        String normalizedHost = normalizeServerAddressHost(currentServer.address);
+        if (normalizedHost.isEmpty()) {
+            return false;
+        }
+
+        CompanionConfig currentConfig = getConfig();
+        for (String allowedServerId : currentConfig.allowedServerIds) {
+            if (matchesAllowedServerId(normalizedHost, allowedServerId)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static boolean matchesAllowedServerId(String normalizedHost, String allowedServerId) {
+        String normalizedAllowed = normalizeServerAddressHost(allowedServerId);
+        if (normalizedAllowed.isEmpty()) {
+            return false;
+        }
+
+        return normalizedHost.equals(normalizedAllowed)
+                || normalizedHost.endsWith("." + normalizedAllowed);
+    }
+
+    private static String normalizeServerAddressHost(String address) {
+        if (address == null) {
+            return "";
+        }
+
+        String normalized = address.trim().toLowerCase(java.util.Locale.ROOT);
+        if (normalized.isEmpty()) {
+            return "";
+        }
+
+        int schemeSeparator = normalized.indexOf("://");
+        if (schemeSeparator >= 0 && schemeSeparator + 3 < normalized.length()) {
+            normalized = normalized.substring(schemeSeparator + 3);
+        }
+
+        int pathSeparator = normalized.indexOf('/');
+        if (pathSeparator >= 0) {
+            normalized = normalized.substring(0, pathSeparator);
+        }
+
+        if (normalized.startsWith("[")) {
+            int closingBracket = normalized.indexOf(']');
+            if (closingBracket > 0) {
+                normalized = normalized.substring(1, closingBracket);
+            }
+        } else {
+            int lastColon = normalized.lastIndexOf(':');
+            if (lastColon > 0 && normalized.indexOf(':') == lastColon) {
+                normalized = normalized.substring(0, lastColon);
+            }
+        }
+
+        while (normalized.endsWith(".")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+
+        return normalized;
     }
 
     private synchronized void logMalformedOncePerConnection(BinaryDecodingException ex) {
