@@ -3145,8 +3145,7 @@ public final class CompanionClientRuntime {
 
         String formattedPoints = formatGangMetricValue(pointsValue, false);
         String formattedBank = formatGangMetricValue(bankValue, true);
-        String leftText =
-                textRenderer.trimToWidth(formattedPoints, Math.max(8, segmentWidth - 16));
+        String leftText = textRenderer.trimToWidth(formattedPoints, Math.max(8, segmentWidth - 16));
         String rightText =
                 textRenderer.trimToWidth("Bank " + formattedBank, Math.max(8, segmentWidth - 16));
         drawContext.drawTextWithShadow(
