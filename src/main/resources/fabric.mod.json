@@ -2,22 +2,21 @@
   "schemaVersion": 1,
   "id": "cosmicprisonsmod",
   "version": "${version}",
-  "name": "CosmicPrisonsMod",
-  "description": "",
-  "authors": [],
+  "name": "Cosmic Prisons Server Companion",
+  "description": "Optional Fabric client companion for server-authoritative Cosmic Prisons UI.",
+  "authors": [
+    "Landon"
+  ],
   "contact": {},
   "license": "All-Rights-Reserved",
   "icon": "assets/cosmicprisonsmod/icon.png",
   "environment": "client",
   "entrypoints": {
-    "fabric-datagen": [
-      "me.landon.client.CosmicPrisonsModDataGenerator"
+    "main": [
+      "me.landon.CosmicPrisonsMod"
     ],
     "client": [
       "me.landon.client.CosmicPrisonsModClient"
-    ],
-    "main": [
-      "me.landon.CosmicPrisonsMod"
     ]
   },
   "mixins": [

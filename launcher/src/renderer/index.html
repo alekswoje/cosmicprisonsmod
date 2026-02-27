@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cosmic Prisons Launcher</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="scene"></div>
+
+    <main class="launcher-shell">
+      <header class="topbar">
+        <div>
+          <p class="logo-kicker">CosmicPrisonsMod</p>
+          <h1>Cosmic Prisons Launcher</h1>
+        </div>
+        <div class="update-strip">
+          <span id="version-pill" class="pill">Checking updates...</span>
+          <button id="update-btn" class="btn btn-ghost hidden">Update</button>
+        </div>
+      </header>
+
+      <section class="center-stage">
+        <button id="play-direct-btn" class="btn btn-play">Play</button>
+        <button id="install-open-btn" class="btn btn-install">Install into a Client</button>
+      </section>
+
+      <footer class="footer-line">
+        <span id="install-summary">No install detected yet.</span>
+        <button id="open-logs-btn" class="btn btn-link">Logs</button>
+      </footer>
+
+      <section id="install-modal" class="install-modal hidden">
+        <div class="modal-card">
+          <h2>Install Target</h2>
+          <div class="modal-actions">
+            <button id="install-native-btn" class="btn">Native Minecraft</button>
+            <button id="install-lunar-btn" class="btn">Lunar Client</button>
+          </div>
+
+          <div id="lunar-picker" class="lunar-picker hidden">
+            <label for="lunar-candidate-select">Choose Lunar folder</label>
+            <select id="lunar-candidate-select"></select>
+            <div class="modal-actions">
+              <button id="install-lunar-selected-btn" class="btn">Install to Selected</button>
+              <button id="choose-lunar-folder-btn" class="btn btn-ghost">Choose Folder</button>
+            </div>
+          </div>
+
+          <button id="close-install-modal-btn" class="btn btn-link">Back</button>
+        </div>
+      </section>
+
+      <section id="message-box" class="message hidden"></section>
+    </main>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "text.cosmicprisonsmod.server_not_allowed": "Companion blocked: serverId '%s' is not in allowedServerIds",
+  "text.cosmicprisonsmod.settings.title": "Cosmic Prisons Mod Settings",
+  "text.cosmicprisonsmod.settings.subtitle": "Feature cards let you toggle and inspect each module.",
+  "text.cosmicprisonsmod.settings.button.open": "Mod Settings",
+  "text.cosmicprisonsmod.settings.button.done": "Done",
+  "text.cosmicprisonsmod.settings.empty": "No features are currently available.",
+  "text.cosmicprisonsmod.settings.toggle.on": "ON",
+  "text.cosmicprisonsmod.settings.toggle.off": "OFF",
+  "text.cosmicprisonsmod.settings.see_more": "Details",
+  "text.cosmicprisonsmod.settings.popup.close": "Close",
+  "text.cosmicprisonsmod.settings.popup.hint": "ESC or click outside to close",
+  "text.cosmicprisonsmod.settings.popup.examples": "Examples",
+  "text.cosmicprisonsmod.feature.inventory_item_overlays.icon": "CE",
+  "text.cosmicprisonsmod.feature.inventory_item_overlays.name": "Item Value Overlays",
+  "text.cosmicprisonsmod.feature.inventory_item_overlays.description": "Shows Cosmic Energy and Money Note values on items without hovering.",
+  "text.cosmicprisonsmod.feature.inventory_item_overlays.example.cosmic_label": "Cosmic Energy",
+  "text.cosmicprisonsmod.feature.inventory_item_overlays.example.money_label": "Money Note",
+  "text.cosmicprisonsmod.feature.inventory_item_overlays.example.cosmic_value": "14.2K",
+  "text.cosmicprisonsmod.feature.inventory_item_overlays.example.money_value": "2.7M",
+  "category.cosmicprisonsmod": "Cosmic Prisons Companion"
+}
