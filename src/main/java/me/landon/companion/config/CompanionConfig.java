@@ -63,6 +63,9 @@ public final class CompanionConfig {
     public static final double HUD_WIDGET_SCALE_MAX = 1.65D;
     public static final double HUD_WIDGET_WIDTH_MULTIPLIER_MIN = 0.55D;
     public static final double HUD_WIDGET_WIDTH_MULTIPLIER_MAX = 1.35D;
+    public static final int PING_VISUAL_DURATION_SECONDS_MIN = 2;
+    public static final int PING_VISUAL_DURATION_SECONDS_MAX = 10;
+    public static final int PING_VISUAL_DURATION_SECONDS_DEFAULT = 5;
 
     public List<String> allowedServerIds = new ArrayList<>();
     public boolean enablePayloadCodecFallback = false;
@@ -80,6 +83,8 @@ public final class CompanionConfig {
     public boolean requireServerSignature;
     public List<String> serverSignaturePublicKeys = new ArrayList<>();
     public boolean logMalformedOncePerConnection = true;
+    public int pingVisualDurationSeconds = PING_VISUAL_DURATION_SECONDS_DEFAULT;
+    public boolean pingParticlesEnabled = true;
 
     public static CompanionConfig defaults() {
         CompanionConfig config = new CompanionConfig();
@@ -95,6 +100,8 @@ public final class CompanionConfig {
         config.hudLeaderboardsCycleMode = true;
         config.hudEventVisibility = defaultHudEventVisibility();
         config.hudLeaderboardVisibility = defaultHudLeaderboardVisibility();
+        config.pingVisualDurationSeconds = PING_VISUAL_DURATION_SECONDS_DEFAULT;
+        config.pingParticlesEnabled = true;
         return config;
     }
 
@@ -245,6 +252,7 @@ public final class CompanionConfig {
             cleanedHudLeaderboardVisibility.put(normalizedKey, entry.getValue());
         }
         hudLeaderboardVisibility = cleanedHudLeaderboardVisibility;
+        pingVisualDurationSeconds = clampPingVisualDurationSeconds(pingVisualDurationSeconds);
     }
 
     public boolean isSignatureVerificationEnforced() {
@@ -337,6 +345,12 @@ public final class CompanionConfig {
         }
         return Math.max(
                 HUD_WIDGET_WIDTH_MULTIPLIER_MIN, Math.min(HUD_WIDGET_WIDTH_MULTIPLIER_MAX, value));
+    }
+
+    public static int clampPingVisualDurationSeconds(int value) {
+        return Math.max(
+                PING_VISUAL_DURATION_SECONDS_MIN,
+                Math.min(PING_VISUAL_DURATION_SECONDS_MAX, value));
     }
 
     private static Map<String, Boolean> defaultHudEventVisibility() {

@@ -1,5 +1,8 @@
 package me.landon.client.runtime;
 
+import it.unimi.dsi.fastutil.ints.Int2LongMap;
+import it.unimi.dsi.fastutil.ints.Int2LongOpenHashMap;
+import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.ints.IntSet;
 import java.io.InputStream;
 import java.net.URI;
@@ -64,12 +67,14 @@ import net.minecraft.client.render.block.entity.BeaconBlockEntityRenderer;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.particle.ParticleEffect;
 import net.minecraft.particle.ParticleTypes;
+import net.minecraft.registry.tag.ItemTags;
 import net.minecraft.screen.ScreenHandler;
 import net.minecraft.screen.slot.Slot;
 import net.minecraft.text.Text;
@@ -131,6 +136,16 @@ public final class CompanionClientRuntime {
     private static final int PING_BEAM_COLOR_TRUCE = 0xFFAF4D;
     private static final float PING_BEAM_INNER_RADIUS = 0.2F;
     private static final float PING_BEAM_OUTER_RADIUS = 0.25F;
+    private static final int PING_LABEL_TEXT_COLOR_GANG = 0xFFE4F4FF;
+    private static final int PING_LABEL_TEXT_COLOR_TRUCE = 0xFFFFEEDB;
+    private static final int PING_LABEL_DISTANCE_COLOR_GANG = 0xFFB7DFFF;
+    private static final int PING_LABEL_DISTANCE_COLOR_TRUCE = 0xFFFFD4AA;
+    private static final int PING_LABEL_FRAME_COLOR_GANG = 0xFF3E90CE;
+    private static final int PING_LABEL_FRAME_COLOR_TRUCE = 0xFFD77A2A;
+    private static final int PING_LABEL_BACKGROUND_COLOR_GANG = 0x132435;
+    private static final int PING_LABEL_BACKGROUND_COLOR_TRUCE = 0x2F1C0D;
+    private static final double PING_LABEL_VERTICAL_OFFSET = 1.02D;
+    private static final long MILLIS_PER_SECOND = 1000L;
     private static final long PING_FEEDBACK_COOLDOWN_MILLIS = 1500L;
     private static final long UPDATE_CHECK_INTERVAL_MILLIS = 60_000L;
     private static final String MOD_RELEASE_MANIFEST_URL =
@@ -160,6 +175,10 @@ public final class CompanionClientRuntime {
     private final List<KnownOverlayStack> knownOverlayStacks = new ArrayList<>();
     private final Map<String, Long> eventProgressBaselineSeconds = new LinkedHashMap<>();
     private final Map<String, Long> cooldownProgressBaselineSeconds = new LinkedHashMap<>();
+    private final Int2LongMap gangPingVisualExpiryAtMillis = new Int2LongOpenHashMap();
+    private final Int2LongMap trucePingVisualExpiryAtMillis = new Int2LongOpenHashMap();
+    private final IntSet gangPingVisualSeededIds = new IntOpenHashSet();
+    private final IntSet trucePingVisualSeededIds = new IntOpenHashSet();
     private KeyBinding gangPingKeyBinding;
     private KeyBinding trucePingKeyBinding;
 
@@ -530,6 +549,52 @@ public final class CompanionClientRuntime {
         persistGameOptions();
     }
 
+    /** Returns configured local ping visual duration in seconds (2..10). */
+    public synchronized int pingVisualDurationSeconds() {
+        return CompanionConfig.clampPingVisualDurationSeconds(
+                getConfig().pingVisualDurationSeconds);
+    }
+
+    /** Persists local ping visual duration in seconds (2..10). */
+    public synchronized void setPingVisualDurationSeconds(int durationSeconds) {
+        CompanionConfig currentConfig = getConfig();
+        int clamped = CompanionConfig.clampPingVisualDurationSeconds(durationSeconds);
+        if (currentConfig.pingVisualDurationSeconds == clamped) {
+            return;
+        }
+
+        currentConfig.pingVisualDurationSeconds = clamped;
+        configManager.save(currentConfig);
+        config = currentConfig;
+    }
+
+    /** Returns whether ping particles are enabled in addition to beacon beams. */
+    public synchronized boolean pingParticlesEnabled() {
+        return getConfig().pingParticlesEnabled;
+    }
+
+    /** Persists whether ping particles are enabled in addition to beacon beams. */
+    public synchronized void setPingParticlesEnabled(boolean enabled) {
+        CompanionConfig currentConfig = getConfig();
+        if (currentConfig.pingParticlesEnabled == enabled) {
+            return;
+        }
+
+        currentConfig.pingParticlesEnabled = enabled;
+        configManager.save(currentConfig);
+        config = currentConfig;
+    }
+
+    /** Restores ping visual settings to defaults. */
+    public synchronized void resetPingVisualSettingsToDefault() {
+        CompanionConfig currentConfig = getConfig();
+        currentConfig.pingVisualDurationSeconds =
+                CompanionConfig.PING_VISUAL_DURATION_SECONDS_DEFAULT;
+        currentConfig.pingParticlesEnabled = true;
+        configManager.save(currentConfig);
+        config = currentConfig;
+    }
+
     /**
      * Rewrites crosshair targeting when peaceful-mining pass-through applies to an entity.
      *
@@ -708,6 +773,7 @@ public final class CompanionClientRuntime {
 
     private synchronized void onJoin(MinecraftClient client) {
         session.reset();
+        clearPingVisualTracking();
         clearOverlayRenderCaches();
         clearActivePeacefulMiningTarget();
         gangPingKeyWasDown = false;
@@ -719,6 +785,7 @@ public final class CompanionClientRuntime {
 
     private synchronized void onDisconnect() {
         session.reset();
+        clearPingVisualTracking();
         clearOverlayRenderCaches();
         clearActivePeacefulMiningTarget();
         gangPingKeyWasDown = false;
@@ -750,6 +817,7 @@ public final class CompanionClientRuntime {
             session.clearPeacefulMiningPassThroughIds();
             session.clearGangPingBeaconIds();
             session.clearTrucePingBeaconIds();
+            clearPingVisualTracking();
             clearOverlayRenderCaches();
             clearActivePeacefulMiningTarget();
         }
@@ -877,6 +945,7 @@ public final class CompanionClientRuntime {
         if (!supportsGangTrucePings) {
             session.clearGangPingBeaconIds();
             session.clearTrucePingBeaconIds();
+            clearPingVisualTracking();
         }
     }
 
@@ -903,12 +972,57 @@ public final class CompanionClientRuntime {
                     session.applyPeacefulMiningPassThroughDelta(
                             markerDelta.addEntityIds(), markerDelta.removeEntityIds());
             case ProtocolConstants.MARKER_TYPE_GANG_PING_BEACON ->
-                    session.applyGangPingBeaconDelta(
+                    applyGangPingBeaconDelta(
                             markerDelta.addEntityIds(), markerDelta.removeEntityIds());
             case ProtocolConstants.MARKER_TYPE_TRUCE_PING_BEACON ->
-                    session.applyTrucePingBeaconDelta(
+                    applyTrucePingBeaconDelta(
                             markerDelta.addEntityIds(), markerDelta.removeEntityIds());
             default -> {}
+        }
+    }
+
+    private void applyGangPingBeaconDelta(
+            List<Integer> addEntityIds, List<Integer> removeEntityIds) {
+        session.applyGangPingBeaconDelta(addEntityIds, removeEntityIds);
+        trackPingVisualDelta(
+                gangPingVisualExpiryAtMillis,
+                gangPingVisualSeededIds,
+                addEntityIds,
+                removeEntityIds);
+    }
+
+    private void applyTrucePingBeaconDelta(
+            List<Integer> addEntityIds, List<Integer> removeEntityIds) {
+        session.applyTrucePingBeaconDelta(addEntityIds, removeEntityIds);
+        trackPingVisualDelta(
+                trucePingVisualExpiryAtMillis,
+                trucePingVisualSeededIds,
+                addEntityIds,
+                removeEntityIds);
+    }
+
+    private void trackPingVisualDelta(
+            Int2LongMap visualExpiryMap,
+            IntSet visualSeededIds,
+            List<Integer> addEntityIds,
+            List<Integer> removeEntityIds) {
+        long now = System.currentTimeMillis();
+        long expiryAt = safeAddMillis(now, pingVisualDurationMillis());
+        for (int entityId : addEntityIds) {
+            if (entityId < 0) {
+                continue;
+            }
+
+            visualExpiryMap.put(entityId, expiryAt);
+            visualSeededIds.add(entityId);
+        }
+
+        for (int entityId : removeEntityIds) {
+            if (entityId < 0) {
+                continue;
+            }
+
+            visualSeededIds.remove(entityId);
         }
     }
 
@@ -1137,6 +1251,7 @@ public final class CompanionClientRuntime {
     private void renderHud(DrawContext drawContext, RenderTickCounter tickCounter) {
         renderHotbarOverlays(drawContext);
         renderHudWidgetPanels(drawContext, false, Map.of(), Map.of(), Map.of());
+        renderPingBeaconLabels(drawContext, tickCounter);
         renderOutdatedVersionNotice(drawContext);
     }
 
@@ -3630,7 +3745,7 @@ public final class CompanionClientRuntime {
     }
 
     private void emitPingBeaconParticles(MinecraftClient client) {
-        if (!shouldRenderPingBeacons(client) || client.world == null) {
+        if (!shouldRenderPingBeacons(client) || client.world == null || !pingParticlesEnabled()) {
             return;
         }
 
@@ -3638,16 +3753,24 @@ public final class CompanionClientRuntime {
             return;
         }
 
+        long now = System.currentTimeMillis();
+        IntSet gangVisualIds =
+                resolveActivePingVisualIds(
+                        session.gangPingBeaconIdsSnapshot(),
+                        gangPingVisualExpiryAtMillis,
+                        gangPingVisualSeededIds,
+                        now);
+        IntSet truceVisualIds =
+                resolveActivePingVisualIds(
+                        session.trucePingBeaconIdsSnapshot(),
+                        trucePingVisualExpiryAtMillis,
+                        trucePingVisualSeededIds,
+                        now);
+
         renderPingBeaconParticles(
-                client.world,
-                session.gangPingBeaconIdsSnapshot(),
-                ParticleTypes.SOUL_FIRE_FLAME,
-                ParticleTypes.END_ROD);
+                client.world, gangVisualIds, ParticleTypes.SOUL_FIRE_FLAME, ParticleTypes.END_ROD);
         renderPingBeaconParticles(
-                client.world,
-                session.trucePingBeaconIdsSnapshot(),
-                ParticleTypes.FLAME,
-                ParticleTypes.SMALL_FLAME);
+                client.world, truceVisualIds, ParticleTypes.FLAME, ParticleTypes.SMALL_FLAME);
     }
 
     private synchronized void onWorldRenderEndMain(WorldRenderContext context) {
@@ -3671,8 +3794,19 @@ public final class CompanionClientRuntime {
         float beamRotationDegrees =
                 (float) Math.floorMod(client.world.getTime(), 40L) + tickProgress;
         Vec3d cameraPos = client.gameRenderer.getCamera().getCameraPos();
-        IntSet gangEntityIds = session.gangPingBeaconIdsSnapshot();
-        IntSet truceEntityIds = session.trucePingBeaconIdsSnapshot();
+        long now = System.currentTimeMillis();
+        IntSet gangEntityIds =
+                resolveActivePingVisualIds(
+                        session.gangPingBeaconIdsSnapshot(),
+                        gangPingVisualExpiryAtMillis,
+                        gangPingVisualSeededIds,
+                        now);
+        IntSet truceEntityIds =
+                resolveActivePingVisualIds(
+                        session.trucePingBeaconIdsSnapshot(),
+                        trucePingVisualExpiryAtMillis,
+                        trucePingVisualSeededIds,
+                        now);
 
         renderPingBeaconBeams(
                 context,
@@ -3730,6 +3864,214 @@ public final class CompanionClientRuntime {
                     PING_BEAM_OUTER_RADIUS);
             matrices.pop();
         }
+    }
+
+    private void renderPingBeaconLabels(DrawContext drawContext, RenderTickCounter tickCounter) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (!shouldRenderPingBeacons(client)
+                || drawContext == null
+                || client.world == null
+                || client.player == null
+                || client.gameRenderer == null
+                || client.gameRenderer.getCamera() == null
+                || client.textRenderer == null) {
+            return;
+        }
+
+        float tickProgress = tickCounter == null ? 0.0F : tickCounter.getTickProgress(false);
+        long now = System.currentTimeMillis();
+        IntSet gangEntityIds =
+                resolveActivePingVisualIds(
+                        session.gangPingBeaconIdsSnapshot(),
+                        gangPingVisualExpiryAtMillis,
+                        gangPingVisualSeededIds,
+                        now);
+        IntSet truceEntityIds =
+                resolveActivePingVisualIds(
+                        session.trucePingBeaconIdsSnapshot(),
+                        trucePingVisualExpiryAtMillis,
+                        trucePingVisualSeededIds,
+                        now);
+        IntSet renderedEntityIds = new IntOpenHashSet(gangEntityIds.size() + truceEntityIds.size());
+
+        renderPingBeaconLabels(
+                drawContext,
+                client,
+                gangEntityIds,
+                renderedEntityIds,
+                tickProgress,
+                PING_LABEL_TEXT_COLOR_GANG,
+                PING_LABEL_DISTANCE_COLOR_GANG,
+                PING_LABEL_FRAME_COLOR_GANG,
+                PING_LABEL_BACKGROUND_COLOR_GANG);
+        renderPingBeaconLabels(
+                drawContext,
+                client,
+                truceEntityIds,
+                renderedEntityIds,
+                tickProgress,
+                PING_LABEL_TEXT_COLOR_TRUCE,
+                PING_LABEL_DISTANCE_COLOR_TRUCE,
+                PING_LABEL_FRAME_COLOR_TRUCE,
+                PING_LABEL_BACKGROUND_COLOR_TRUCE);
+    }
+
+    private static void renderPingBeaconLabels(
+            DrawContext drawContext,
+            MinecraftClient client,
+            IntSet entityIds,
+            IntSet renderedEntityIds,
+            float tickProgress,
+            int textColor,
+            int distanceColor,
+            int frameColor,
+            int backgroundColor) {
+        ClientWorld world = client.world;
+        if (world == null || client.player == null || client.textRenderer == null) {
+            return;
+        }
+
+        int screenWidth = drawContext.getScaledWindowWidth();
+        int screenHeight = drawContext.getScaledWindowHeight();
+        Vec3d cameraPos = client.gameRenderer.getCamera().getCameraPos();
+        Vec3d cameraLookDirection =
+                Vec3d.fromPolar(
+                                client.gameRenderer.getCamera().getPitch(),
+                                client.gameRenderer.getCamera().getYaw())
+                        .normalize();
+
+        for (int entityId : entityIds) {
+            if (entityId < 0 || renderedEntityIds.contains(entityId)) {
+                continue;
+            }
+
+            Entity entity = world.getEntityById(entityId);
+            if (entity == null || entity.isRemoved()) {
+                continue;
+            }
+
+            Vec3d entityPos = entity.getLerpedPos(tickProgress);
+            Vec3d labelAnchor =
+                    new Vec3d(
+                            entityPos.x,
+                            entityPos.y + entity.getHeight() + PING_LABEL_VERTICAL_OFFSET,
+                            entityPos.z);
+            if (labelAnchor.subtract(cameraPos).dotProduct(cameraLookDirection) <= 0.0D) {
+                continue;
+            }
+
+            Vec3d projected = client.gameRenderer.project(labelAnchor);
+            if (!projected.isFinite()) {
+                continue;
+            }
+
+            double normalizedX = (projected.x * 0.5D) + 0.5D;
+            double normalizedY = 0.5D - (projected.y * 0.5D);
+            if (!Double.isFinite(normalizedX) || !Double.isFinite(normalizedY)) {
+                continue;
+            }
+
+            int centerX = (int) Math.round(normalizedX * screenWidth);
+            int anchorY = (int) Math.round(normalizedY * screenHeight);
+            drawPingBeaconLabel(
+                    drawContext,
+                    client.textRenderer,
+                    centerX,
+                    anchorY,
+                    entity,
+                    Math.sqrt(client.player.squaredDistanceTo(entityPos)),
+                    textColor,
+                    distanceColor,
+                    frameColor,
+                    backgroundColor);
+            renderedEntityIds.add(entityId);
+        }
+    }
+
+    private static void drawPingBeaconLabel(
+            DrawContext drawContext,
+            TextRenderer textRenderer,
+            int centerX,
+            int anchorY,
+            Entity entity,
+            double distance,
+            int textColor,
+            int distanceColor,
+            int frameColor,
+            int backgroundColor) {
+        String lineOne = entity.getName().getString() + "  " + formatPingHealth(entity) + " HP";
+        String lineTwo = Math.max(0, (int) Math.round(distance)) + " blocks away";
+        int lineOneWidth = textRenderer.getWidth(lineOne);
+        int lineTwoWidth = textRenderer.getWidth(lineTwo);
+        int maxWidth = Math.max(lineOneWidth, lineTwoWidth);
+        int boxPadding = 3;
+        int boxTop = anchorY - (textRenderer.fontHeight * 2) - 8;
+        int boxBottom = boxTop + (textRenderer.fontHeight * 2) + 5;
+        int boxLeft = centerX - (maxWidth / 2) - boxPadding;
+        int boxRight = centerX + ((maxWidth + 1) / 2) + boxPadding;
+        int lineOneX = centerX - (lineOneWidth / 2);
+        int lineTwoX = centerX - (lineTwoWidth / 2);
+        int lineOneY = boxTop + 2;
+        int lineTwoY = lineOneY + textRenderer.fontHeight + 1;
+
+        drawContext.fill(boxLeft, boxTop, boxRight, boxBottom, withAlpha(backgroundColor, 188));
+        drawContext.fill(boxLeft, boxTop, boxRight, boxTop + 1, withAlpha(frameColor, 240));
+        drawContext.fill(boxLeft, boxBottom - 1, boxRight, boxBottom, withAlpha(frameColor, 220));
+        drawContext.drawTextWithShadow(textRenderer, lineOne, lineOneX, lineOneY, textColor);
+        drawContext.drawTextWithShadow(textRenderer, lineTwo, lineTwoX, lineTwoY, distanceColor);
+    }
+
+    private static String formatPingHealth(Entity entity) {
+        if (!(entity instanceof LivingEntity livingEntity)) {
+            return "?";
+        }
+
+        float totalHealth = livingEntity.getHealth() + livingEntity.getAbsorptionAmount();
+        if (totalHealth <= 0.0F) {
+            return "0";
+        }
+
+        float roundedToTenth = Math.round(totalHealth * 10.0F) / 10.0F;
+        float roundedToWhole = Math.round(roundedToTenth);
+        if (Math.abs(roundedToTenth - roundedToWhole) < 0.05F) {
+            return Integer.toString((int) roundedToWhole);
+        }
+
+        return String.format(java.util.Locale.ROOT, "%.1f", roundedToTenth);
+    }
+
+    private IntSet resolveActivePingVisualIds(
+            IntSet serverMarkerIds, Int2LongMap visualExpiryMap, IntSet visualSeededIds, long now) {
+        IntSet activeIds = new IntOpenHashSet(serverMarkerIds.size() + visualExpiryMap.size());
+        long durationMillis = pingVisualDurationMillis();
+
+        for (int entityId : serverMarkerIds) {
+            if (entityId < 0) {
+                continue;
+            }
+
+            if (!visualExpiryMap.containsKey(entityId) && !visualSeededIds.contains(entityId)) {
+                visualExpiryMap.put(entityId, safeAddMillis(now, durationMillis));
+                visualSeededIds.add(entityId);
+            }
+
+            if (visualExpiryMap.get(entityId) > now) {
+                activeIds.add(entityId);
+            }
+        }
+
+        var iterator = visualExpiryMap.int2LongEntrySet().iterator();
+        while (iterator.hasNext()) {
+            Int2LongMap.Entry entry = iterator.next();
+            if (entry.getLongValue() <= now) {
+                iterator.remove();
+                continue;
+            }
+
+            activeIds.add(entry.getIntKey());
+        }
+
+        return activeIds;
     }
 
     private static void renderPingBeaconParticles(
@@ -3909,7 +4251,9 @@ public final class CompanionClientRuntime {
                 && getFeatureToggleState(ClientFeatures.PINGS_ID)
                 && (isFeatureSupportedByServer(ClientFeatures.PINGS_ID)
                         || !session.gangPingBeaconIdsSnapshot().isEmpty()
-                        || !session.trucePingBeaconIdsSnapshot().isEmpty());
+                        || !session.trucePingBeaconIdsSnapshot().isEmpty()
+                        || !gangPingVisualExpiryAtMillis.isEmpty()
+                        || !trucePingVisualExpiryAtMillis.isEmpty());
     }
 
     private boolean canSendPingIntent(MinecraftClient client) {
@@ -3959,6 +4303,29 @@ public final class CompanionClientRuntime {
         return keyBinding != null && keyBinding.isPressed();
     }
 
+    private long pingVisualDurationMillis() {
+        return pingVisualDurationSeconds() * MILLIS_PER_SECOND;
+    }
+
+    private static long safeAddMillis(long baseMillis, long addMillis) {
+        if (addMillis <= 0L) {
+            return baseMillis;
+        }
+
+        if (Long.MAX_VALUE - baseMillis < addMillis) {
+            return Long.MAX_VALUE;
+        }
+
+        return baseMillis + addMillis;
+    }
+
+    private void clearPingVisualTracking() {
+        gangPingVisualExpiryAtMillis.clear();
+        trucePingVisualExpiryAtMillis.clear();
+        gangPingVisualSeededIds.clear();
+        trucePingVisualSeededIds.clear();
+    }
+
     private boolean shouldApplyPeacefulMiningPassThrough(MinecraftClient client) {
         if (client == null
                 || client.player == null
@@ -3970,6 +4337,10 @@ public final class CompanionClientRuntime {
         if (!session.gateState().isEnabled()
                 || !isFeatureSupportedByServer(ClientFeatures.PEACEFUL_MINING_ID)
                 || !getFeatureToggleState(ClientFeatures.PEACEFUL_MINING_ID)) {
+            return false;
+        }
+
+        if (!client.player.getMainHandStack().isIn(ItemTags.PICKAXES)) {
             return false;
         }
 

@@ -954,6 +954,13 @@ public final class FeatureSettingsScreen extends Screen {
                                 }
                             }),
                     new PopupActionDefinition(
+                            "text.cosmicprisonsmod.settings.popup.action.ping_visuals",
+                            () -> {
+                                if (client != null) {
+                                    client.setScreen(new PingVisualSettingsScreen(runtime, this));
+                                }
+                            }),
+                    new PopupActionDefinition(
                             "text.cosmicprisonsmod.settings.popup.action.ping_reset",
                             runtime::resetPingKeybindsToDefault));
         }
