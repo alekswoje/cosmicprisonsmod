@@ -68,8 +68,6 @@
   "text.cosmicprisonsmod.pings.unavailable.disabled": "Pings are disabled in Mod Settings.",
   "text.cosmicprisonsmod.pings.unavailable.unsupported": "Pings unavailable: server has not enabled ping support.",
   "text.cosmicprisonsmod.pings.unavailable.channel": "Pings unavailable: network channel is not ready.",
-  "text.cosmicprisonsmod.pings.sent.gang": "Gang ping sent.",
-  "text.cosmicprisonsmod.pings.sent.truce": "Truce ping sent.",
   "text.cosmicprisonsmod.hud.cooldowns.title": "Cooldowns",
   "text.cosmicprisonsmod.hud.events.title": "Events",
   "text.cosmicprisonsmod.hud.satchels.title": "Satchel Display",

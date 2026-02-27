@@ -325,7 +325,7 @@ public final class CompanionConfig {
         defaults.put(HUD_WIDGET_EVENTS_ID, 0.86D);
         defaults.put(HUD_WIDGET_COOLDOWNS_ID, 1.0D);
         defaults.put(HUD_WIDGET_SATCHELS_ID, 1.0D);
-        defaults.put(HUD_WIDGET_GANG_ID, 1.08D);
+        defaults.put(HUD_WIDGET_GANG_ID, 0.92D);
         defaults.put(HUD_WIDGET_LEADERBOARD_GIFT_ID, 0.92D);
         defaults.put(HUD_WIDGET_LEADERBOARD_GANG_ID, 0.92D);
         defaults.put(HUD_WIDGET_LEADERBOARD_BLOCKS_ID, 0.92D);

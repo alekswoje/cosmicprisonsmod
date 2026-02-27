@@ -17,6 +17,7 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import me.landon.CosmicPrisonsMod;
@@ -40,6 +41,8 @@ import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
+import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderContext;
+import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderEvents;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.fabricmc.loader.api.FabricLoader;
@@ -52,6 +55,7 @@ import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.input.KeyInput;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.render.RenderTickCounter;
+import net.minecraft.client.render.block.entity.BeaconBlockEntityRenderer;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.entity.Entity;
@@ -68,6 +72,7 @@ import net.minecraft.util.Identifier;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.hit.HitResult;
+import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -87,7 +92,6 @@ public final class CompanionClientRuntime {
     private static final int HUD_PANEL_HORIZONTAL_PADDING = 4;
     private static final int HUD_PANEL_VERTICAL_PADDING = 3;
     private static final int HUD_PANEL_EDGE_INSET = 3;
-    private static final int HUD_COOLDOWN_CIRCLE_RADIUS = 8;
     private static final long LEADERBOARD_CYCLE_INTERVAL_MILLIS = 5500L;
     private static final Pattern LEADERBOARD_ENTRY_PATTERN =
             Pattern.compile("^#(\\d+)\\s+(.+?)\\s+-\\s+(.+)$");
@@ -96,6 +100,11 @@ public final class CompanionClientRuntime {
     private static final KeyBinding.Category PING_KEYBIND_CATEGORY =
             KeyBinding.Category.create(Identifier.of(CosmicPrisonsMod.MOD_ID, "pings"));
     private static final int PING_PARTICLE_COLUMN_SEGMENTS = 6;
+    private static final int PING_BEAM_HEIGHT = 2048;
+    private static final int PING_BEAM_COLOR_GANG = 0x45A8FF;
+    private static final int PING_BEAM_COLOR_TRUCE = 0xFFAF4D;
+    private static final float PING_BEAM_INNER_RADIUS = 0.2F;
+    private static final float PING_BEAM_OUTER_RADIUS = 0.25F;
     private static final long PING_FEEDBACK_COOLDOWN_MILLIS = 1500L;
     private static final long UPDATE_CHECK_INTERVAL_MILLIS = 60_000L;
     private static final String MOD_RELEASE_MANIFEST_URL =
@@ -112,9 +121,11 @@ public final class CompanionClientRuntime {
     private final ConnectionSessionState session = new ConnectionSessionState();
     private final CompanionConfigManager configManager = new CompanionConfigManager();
     private final BuildAttestationLoader buildAttestationLoader = new BuildAttestationLoader();
-    private final ModUpdateChecker modUpdateChecker = new ModUpdateChecker(resolveModVersion());
+    private final ModUpdateChecker modUpdateChecker =
+            new ModUpdateChecker(this::resolveInstalledVersionForUpdateCheck);
     private final List<KnownOverlayStack> knownOverlayStacks = new ArrayList<>();
     private final Map<String, Long> eventProgressBaselineSeconds = new LinkedHashMap<>();
+    private final Map<String, Long> cooldownProgressBaselineSeconds = new LinkedHashMap<>();
     private KeyBinding gangPingKeyBinding;
     private KeyBinding trucePingKeyBinding;
 
@@ -155,6 +166,7 @@ public final class CompanionClientRuntime {
         ClientTickEvents.END_CLIENT_TICK.register(this::onEndTick);
         ClientWorldEvents.AFTER_CLIENT_WORLD_CHANGE.register(this::onWorldChange);
         ScreenEvents.AFTER_INIT.register(this::onScreenAfterInit);
+        WorldRenderEvents.END_MAIN.register(this::onWorldRenderEndMain);
 
         HudRenderCallback.EVENT.register(this::renderHud);
 
@@ -1196,14 +1208,22 @@ public final class CompanionClientRuntime {
                         widthMultiplierOverrides);
 
         boolean hasEventsPanel = false;
+        boolean hasCooldownPanel = false;
         for (HudWidgetPanel panel : panels) {
             if (CompanionConfig.HUD_WIDGET_EVENTS_ID.equals(panel.widgetId())) {
                 hasEventsPanel = true;
+            } else if (CompanionConfig.HUD_WIDGET_COOLDOWNS_ID.equals(panel.widgetId())) {
+                hasCooldownPanel = true;
+            }
+            if (hasEventsPanel && hasCooldownPanel) {
                 break;
             }
         }
         if (!hasEventsPanel) {
             eventProgressBaselineSeconds.clear();
+        }
+        if (!hasCooldownPanel) {
+            cooldownProgressBaselineSeconds.clear();
         }
 
         for (HudWidgetPanel panel : panels) {
@@ -1349,13 +1369,25 @@ public final class CompanionClientRuntime {
         }
 
         if (!shouldRenderHudWidgets()) {
-            return editorMode ? List.copyOf(previewLines) : List.of();
+            if (!editorMode) {
+                return List.of();
+            }
+            List<String> preview = List.copyOf(previewLines);
+            return HudWidgetCatalog.isLeaderboardWidget(widgetId)
+                    ? stripLeaderboardHeader(new ArrayList<>(preview))
+                    : preview;
         }
 
         ConnectionSessionState.HudWidgetEntry entry =
                 widgetSnapshot.get(normalizeWidgetId(widgetId));
         if (entry == null || isHudWidgetExpired(entry, now)) {
-            return editorMode ? List.copyOf(previewLines) : List.of();
+            if (!editorMode) {
+                return List.of();
+            }
+            List<String> preview = List.copyOf(previewLines);
+            return HudWidgetCatalog.isLeaderboardWidget(widgetId)
+                    ? stripLeaderboardHeader(new ArrayList<>(preview))
+                    : preview;
         }
 
         List<String> lines = new ArrayList<>(entry.lines().size());
@@ -1375,6 +1407,8 @@ public final class CompanionClientRuntime {
                                     HudWidgetCatalog.parseDurationSeconds(
                                                     HudWidgetCatalog.splitLine(line).value())
                                             .orElse(Long.MAX_VALUE)));
+        } else if (HudWidgetCatalog.isLeaderboardWidget(widgetId)) {
+            lines = stripLeaderboardHeader(lines);
         }
 
         if (lines.size() > ProtocolConstants.MAX_WIDGET_LINES) {
@@ -1382,9 +1416,29 @@ public final class CompanionClientRuntime {
         }
 
         if (lines.isEmpty()) {
-            return editorMode ? List.copyOf(previewLines) : List.of();
+            if (!editorMode) {
+                return List.of();
+            }
+            List<String> preview = List.copyOf(previewLines);
+            return HudWidgetCatalog.isLeaderboardWidget(widgetId)
+                    ? stripLeaderboardHeader(new ArrayList<>(preview))
+                    : preview;
         }
 
+        return lines;
+    }
+
+    private static List<String> stripLeaderboardHeader(List<String> lines) {
+        if (lines.size() <= 1) {
+            return lines;
+        }
+        String first = lines.get(0);
+        if (first == null || first.isBlank()) {
+            return new ArrayList<>(lines.subList(1, lines.size()));
+        }
+        if (parseLeaderboardEntry(first.trim()) == null) {
+            return new ArrayList<>(lines.subList(1, lines.size()));
+        }
         return lines;
     }
 
@@ -1457,7 +1511,9 @@ public final class CompanionClientRuntime {
                             .orElse(HudWidgetCatalog.leaderboardWidgets().get(0));
             candidates.add(
                     new LeaderboardCandidate(
-                            fallbackDescriptor, List.copyOf(fallbackDescriptor.previewLines())));
+                            fallbackDescriptor,
+                            stripLeaderboardHeader(
+                                    new ArrayList<>(fallbackDescriptor.previewLines()))));
         }
 
         int index = 0;
@@ -1663,6 +1719,13 @@ public final class CompanionClientRuntime {
         drawContext.fill(localRight - 1, 0, localRight, localBottom, withAlpha(0x2D3A4F, 255));
 
         Text panelTitle = Text.translatable(panel.titleTranslationKey());
+        if (CompanionConfig.HUD_WIDGET_GANG_ID.equals(panel.widgetId())
+                && !panel.lines().isEmpty()) {
+            String gangTitle = panel.lines().get(0);
+            if (gangTitle != null && !gangTitle.isBlank()) {
+                panelTitle = Text.literal(gangTitle.trim());
+            }
+        }
         int titleX =
                 CompanionConfig.HUD_WIDGET_GANG_ID.equals(panel.widgetId())
                         ? Math.max(
@@ -1721,55 +1784,57 @@ public final class CompanionClientRuntime {
         drawContext.getMatrices().popMatrix();
     }
 
-    private static void drawCooldownRows(
+    private void drawCooldownRows(
             DrawContext drawContext,
             TextRenderer textRenderer,
             HudWidgetPanel panel,
             int contentLeft,
             int contentTop,
             int contentRight) {
-        long maxRemaining = 1L;
-        for (String line : panel.lines()) {
-            HudWidgetCatalog.ParsedLine parsedLine = HudWidgetCatalog.splitLine(line);
-            OptionalLong remaining = HudWidgetCatalog.parseDurationSeconds(parsedLine.value());
-            if (remaining.isPresent() && remaining.orElse(0L) > 0L) {
-                maxRemaining = Math.max(maxRemaining, remaining.orElse(0L));
-            }
-        }
-
-        maxRemaining = Math.max(maxRemaining, 3600L);
-
+        Set<String> seenKeys = new HashSet<>();
         int rowY = contentTop;
         for (String line : panel.lines()) {
             HudWidgetCatalog.ParsedLine parsedLine = HudWidgetCatalog.splitLine(line);
             OptionalLong remaining = HudWidgetCatalog.parseDurationSeconds(parsedLine.value());
-            float progress = progressForRemaining(remaining, maxRemaining);
+            String progressKey = normalizeCooldownProgressKey(parsedLine.label());
+            if (!progressKey.isBlank()) {
+                seenKeys.add(progressKey);
+            }
+            float progress = cooldownProgressForLine(progressKey, parsedLine.value(), remaining);
             int statusColor = statusColor(parsedLine.value(), remaining);
-            int circleCenterX = contentLeft + HUD_COOLDOWN_CIRCLE_RADIUS + 1;
-            int circleCenterY = rowY + (panel.lineHeight() / 2) + 1;
-            drawCircularMeter(
-                    drawContext,
-                    circleCenterX,
-                    circleCenterY,
-                    HUD_COOLDOWN_CIRCLE_RADIUS,
-                    progress,
-                    statusColor,
-                    withAlpha(0x41526D, 200));
-
+            int iconLeft = contentLeft;
+            int iconTop = centeredItemTop(rowY, panel.lineHeight());
             ItemStack iconStack = cooldownIcon(parsedLine.label()).getDefaultStack();
-            drawContext.drawItem(
-                    iconStack, circleCenterX - 8, centeredItemTop(rowY, panel.lineHeight()));
+            drawContext.drawItem(iconStack, iconLeft, iconTop);
 
             String labelText = compactCooldownLabel(parsedLine.label());
-            int textX = circleCenterX + HUD_COOLDOWN_CIRCLE_RADIUS + 6;
-            int textMaxWidth = Math.max(8, contentRight - textX - 1);
-            labelText = textRenderer.trimToWidth(labelText, textMaxWidth);
             String valueText = compactStatusText(parsedLine.value(), true);
+            int valueSlotWidth = Math.max(36, Math.min(52, contentRight - contentLeft - 62));
+            int valueAreaLeft = Math.max(contentLeft + 66, contentRight - valueSlotWidth);
+            int valueWidth = textRenderer.getWidth(valueText);
+            int valueX = valueAreaLeft + Math.max(0, valueSlotWidth - valueWidth);
+            int labelX = iconLeft + 22;
+            int labelMaxWidth = Math.max(12, valueAreaLeft - labelX - 4);
+            labelText = textRenderer.trimToWidth(labelText, labelMaxWidth);
 
-            drawContext.drawTextWithShadow(textRenderer, labelText, textX, rowY + 2, 0xFFE6EEFC);
-            drawContext.drawTextWithShadow(textRenderer, valueText, textX, rowY + 11, statusColor);
+            int textY = rowY + 2;
+            drawContext.drawTextWithShadow(textRenderer, labelText, labelX, textY, 0xFFE6EEFC);
+            drawContext.drawTextWithShadow(textRenderer, valueText, valueX, textY, statusColor);
+
+            int barX = labelX;
+            int barY = textY + textRenderer.fontHeight + 1;
+            int barWidth = Math.max(8, valueAreaLeft - barX - 4);
+            drawContext.fill(barX, barY, barX + barWidth, barY + 2, withAlpha(0x31415C, 190));
+            int filled = Math.max(0, Math.min(barWidth, Math.round(barWidth * progress)));
+            if (filled > 0) {
+                drawContext.fill(barX, barY, barX + filled, barY + 2, withAlpha(statusColor, 240));
+            }
 
             rowY += panel.lineHeight();
+        }
+
+        if (!seenKeys.isEmpty()) {
+            cooldownProgressBaselineSeconds.keySet().retainAll(seenKeys);
         }
     }
 
@@ -1882,12 +1947,13 @@ public final class CompanionClientRuntime {
             float progress = parseSatchelProgress(parsedLine.value());
             boolean satchelFull = isSatchelFull(parsedLine.value(), progress);
             String valueText = satchelFull ? "FULL!" : compactSatchelValue(parsedLine.value());
-            int valueWidth = textRenderer.getWidth(valueText);
-            int valueX = Math.max(contentLeft + 58, contentRight - valueWidth);
-
             String label = parsedLine.label();
             int iconLeft = contentLeft;
             int iconTop = centeredItemTop(rowY, panel.lineHeight());
+            int valueSlotWidth = Math.max(40, Math.min(58, contentRight - contentLeft - 62));
+            int valueAreaLeft = Math.max(contentLeft + 58, contentRight - valueSlotWidth);
+            int valueWidth = textRenderer.getWidth(valueText);
+            int valueX = valueAreaLeft + Math.max(0, valueSlotWidth - valueWidth);
             if (satchelFull) {
                 int pulseAlpha = satchelFullPulseAlpha();
                 drawContext.fill(
@@ -1896,33 +1962,28 @@ public final class CompanionClientRuntime {
                         contentRight,
                         rowY + panel.lineHeight() - 2,
                         withAlpha(0x8F1A1A, pulseAlpha));
-                drawContext.fill(iconLeft - 1, iconTop - 1, iconLeft + 17, iconTop, 0xFFFF5757);
-                drawContext.fill(
-                        iconLeft - 1, iconTop + 16, iconLeft + 17, iconTop + 17, 0xFFFF5757);
-                drawContext.fill(iconLeft - 1, iconTop - 1, iconLeft, iconTop + 17, 0xFFFF5757);
-                drawContext.fill(
-                        iconLeft + 16, iconTop - 1, iconLeft + 17, iconTop + 17, 0xFFFF5757);
             }
             drawContext.drawItem(satchelIcon(label).getDefaultStack(), iconLeft, iconTop);
 
             int labelX = iconLeft + 18;
-            int labelMaxWidth = Math.max(12, valueX - labelX - 3);
+            int labelMaxWidth = Math.max(12, valueAreaLeft - labelX - 4);
             String labelText =
                     textRenderer.trimToWidth(satchelFull ? label + " !" : label, labelMaxWidth);
             int labelColor = satchelFull ? 0xFFFFC1C1 : 0xFFE5F4EA;
             int valueColor = satchelFull ? 0xFFFF5D5D : 0xFF9EF0BC;
-            drawContext.drawTextWithShadow(textRenderer, labelText, labelX, rowY, labelColor);
-            drawContext.drawTextWithShadow(textRenderer, valueText, valueX, rowY, valueColor);
+            int textY = rowY + 1;
+            drawContext.drawTextWithShadow(textRenderer, labelText, labelX, textY, labelColor);
+            drawContext.drawTextWithShadow(textRenderer, valueText, valueX, textY, valueColor);
 
             int barX = labelX;
-            int barY = rowY + panel.lineHeight() - 2;
-            int barWidth = Math.max(8, valueX - barX - 3);
+            int barY = rowY + panel.lineHeight() - 3;
+            int barWidth = Math.max(8, valueAreaLeft - barX - 4);
             int trackColor = satchelFull ? withAlpha(0x5D2020, 212) : withAlpha(0x33503F, 185);
             int fillColor = satchelFull ? withAlpha(0xFF5555, 245) : withAlpha(0x66D89A, 235);
-            drawContext.fill(barX, barY, barX + barWidth, barY + 1, trackColor);
+            drawContext.fill(barX, barY, barX + barWidth, barY + 2, trackColor);
             int filled = Math.max(0, Math.min(barWidth, Math.round(barWidth * progress)));
             if (filled > 0) {
-                drawContext.fill(barX, barY, barX + filled, barY + 1, fillColor);
+                drawContext.fill(barX, barY, barX + filled, barY + 2, fillColor);
             }
 
             rowY += panel.lineHeight();
@@ -1979,31 +2040,11 @@ public final class CompanionClientRuntime {
             return;
         }
 
-        int totalRows = Math.max(1, panel.lines().size());
+        int totalRows = Math.max(1, panel.lines().size() - 1);
         int lineHeight = panel.lineHeight();
         GangLayout gangLayout = buildGangLayout(panel.lines());
-
-        String titleTextRaw = panel.lines().get(0);
-        String titleText =
-                textRenderer.trimToWidth(
-                        titleTextRaw == null || titleTextRaw.isBlank()
-                                ? "Gang"
-                                : titleTextRaw.trim(),
-                        Math.max(10, contentRight - contentLeft - 1));
-        int titleWidth = textRenderer.getWidth(titleText);
-        int titleX = contentLeft + Math.max(0, ((contentRight - contentLeft) - titleWidth) / 2);
-        int titleY = contentTop;
-        drawContext.fill(
-                contentLeft,
-                titleY + lineHeight - 2,
-                contentRight,
-                titleY + lineHeight - 1,
-                withAlpha(0x6B4A35, 176));
-        drawContext.drawTextWithShadow(textRenderer, titleText, titleX, titleY, 0xFFFFEAD8);
-
-        int remainingRows = Math.max(0, totalRows - 1);
-        int metadataRows = Math.min(remainingRows, gangLayout.metadataLines().size());
-        int primaryRowsAvailable = Math.max(0, remainingRows - metadataRows);
+        int metadataRows = Math.min(totalRows, gangLayout.metadataLines().size());
+        int primaryRowsAvailable = Math.max(0, totalRows - metadataRows);
 
         List<GangPrimaryLine> primaryLines = gangLayout.primaryLines();
         int visiblePrimaryCount = Math.min(primaryRowsAvailable, primaryLines.size());
@@ -2015,14 +2056,14 @@ public final class CompanionClientRuntime {
 
         for (int index = 0; index < visiblePrimaryCount; index++) {
             GangPrimaryLine line = primaryLines.get(index);
-            int rowY = contentTop + ((index + 1) * lineHeight);
+            int rowY = contentTop + (index * lineHeight);
             renderGangPrimaryLine(
                     drawContext, textRenderer, line, rowY, lineHeight, contentLeft, contentRight);
         }
 
         if (needsOverflow) {
             int hidden = Math.max(1, primaryLines.size() - primaryRowsAvailable + 1);
-            int rowY = contentTop + ((visiblePrimaryCount + 1) * lineHeight);
+            int rowY = contentTop + (visiblePrimaryCount * lineHeight);
             String overflowText =
                     textRenderer.trimToWidth(
                             "... +" + hidden + " more",
@@ -2031,7 +2072,7 @@ public final class CompanionClientRuntime {
                     textRenderer, overflowText, contentLeft + 4, rowY, 0xFF9CB0C8);
         }
 
-        int metadataStartRow = 1 + primaryRowsAvailable;
+        int metadataStartRow = primaryRowsAvailable;
         if (metadataRows > 0) {
             int metadataTopY = contentTop + (metadataStartRow * lineHeight);
             drawContext.fill(
@@ -2064,8 +2105,9 @@ public final class CompanionClientRuntime {
             int contentLeft,
             int contentTop,
             int contentRight) {
+        boolean allowBillionSuffix = !isBlocksLeaderboardPanel(panel);
         double topValue = 0.0D;
-        for (int index = 1; index < panel.lines().size(); index++) {
+        for (int index = 0; index < panel.lines().size(); index++) {
             String line = panel.lines().get(index);
             if (line == null || line.isBlank()) {
                 continue;
@@ -2074,7 +2116,7 @@ public final class CompanionClientRuntime {
             if (entry == null) {
                 continue;
             }
-            OptionalDouble parsedValue = parseLeaderboardValue(entry.value());
+            OptionalDouble parsedValue = parseLeaderboardValue(entry.value(), allowBillionSuffix);
             if (parsedValue.isPresent()) {
                 topValue = Math.max(topValue, parsedValue.orElse(0.0D));
             }
@@ -2089,34 +2131,21 @@ public final class CompanionClientRuntime {
             }
 
             String trimmed = line.trim();
-            if (index == 0) {
-                int textMaxWidth = Math.max(8, contentRight - contentLeft - 1);
-                String titleText = textRenderer.trimToWidth(trimmed, textMaxWidth);
-                int titleX =
-                        contentLeft
-                                + Math.max(
-                                        0,
-                                        ((contentRight - contentLeft)
-                                                        - textRenderer.getWidth(titleText))
-                                                / 2);
-                drawContext.drawTextWithShadow(
-                        textRenderer, titleText, titleX, rowY + 1, 0xFFEFF5FF);
-                drawContext.fill(
-                        contentLeft,
-                        rowY + panel.lineHeight() - 2,
-                        contentRight,
-                        rowY + panel.lineHeight() - 1,
-                        withAlpha(0x355172, 180));
-                rowY += panel.lineHeight();
-                continue;
-            }
-
             LeaderboardEntry entry = parseLeaderboardEntry(trimmed);
             int lineColor = entry == null ? 0xFFD6E2F3 : leaderboardRankColor(entry.rank());
             String displayLine =
                     textRenderer.trimToWidth(trimmed, Math.max(8, contentRight - contentLeft - 1));
             int textY = rowY + 2;
             if (entry != null) {
+                boolean selfEntry = isLocalPlayerEntry(entry.name());
+                if (selfEntry) {
+                    drawContext.fill(
+                            contentLeft,
+                            rowY + 1,
+                            contentRight,
+                            rowY + panel.lineHeight() - 1,
+                            withAlpha(0x1E5AA8, 120));
+                }
                 int valueSlotWidth = Math.max(34, Math.min(58, contentRight - contentLeft - 68));
                 int rankBadgeWidth = 18;
                 int rankX = contentLeft;
@@ -2135,16 +2164,22 @@ public final class CompanionClientRuntime {
                         rowY + panel.lineHeight() - 5,
                         withAlpha(lineColor, 38));
                 drawContext.drawTextWithShadow(textRenderer, rankText, rankX + 1, textY, lineColor);
-                drawContext.drawTextWithShadow(textRenderer, nameText, nameX, textY, 0xFFE5EDF9);
                 drawContext.drawTextWithShadow(
-                        textRenderer, entry.value(), valueX, textY, 0xFFD2E6FF);
+                        textRenderer, nameText, nameX, textY, selfEntry ? 0xFFFFFFFF : 0xFFE5EDF9);
+                drawContext.drawTextWithShadow(
+                        textRenderer,
+                        entry.value(),
+                        valueX,
+                        textY,
+                        selfEntry ? 0xFFE9F2FF : 0xFFD2E6FF);
 
                 int barLeft = nameX;
                 int barRight = Math.max(barLeft + 8, valueAreaLeft - 3);
                 int barY = rowY + panel.lineHeight() - 3;
                 drawContext.fill(barLeft, barY, barRight, barY + 2, withAlpha(0x2E3F57, 188));
                 if (topValue > 0.0D) {
-                    OptionalDouble parsedValue = parseLeaderboardValue(entry.value());
+                    OptionalDouble parsedValue =
+                            parseLeaderboardValue(entry.value(), allowBillionSuffix);
                     if (parsedValue.isPresent()) {
                         double ratio = parsedValue.orElse(0.0D) / topValue;
                         float clampedRatio = (float) Math.max(0.0D, Math.min(1.0D, ratio));
@@ -2166,14 +2201,6 @@ public final class CompanionClientRuntime {
                 drawContext.drawTextWithShadow(
                         textRenderer, displayLine, contentLeft, textY, lineColor);
             }
-            if (entry != null && entry.rank() <= 3) {
-                drawContext.fill(
-                        contentLeft,
-                        rowY + panel.lineHeight() - 2,
-                        contentRight,
-                        rowY + panel.lineHeight() - 1,
-                        withAlpha(lineColor, 150));
-            }
             rowY += panel.lineHeight();
         }
     }
@@ -2194,14 +2221,6 @@ public final class CompanionClientRuntime {
             }
 
             String trimmed = line.trim();
-            if (index == 0) {
-                String compactTitle = "[" + compactLeaderboardTitle(trimmed) + "]";
-                drawContext.drawTextWithShadow(
-                        textRenderer, compactTitle, contentLeft, rowY, 0xFFDCEBFF);
-                rowY += panel.lineHeight();
-                continue;
-            }
-
             LeaderboardEntry entry = parseLeaderboardEntry(trimmed);
             if (entry == null) {
                 drawContext.drawTextWithShadow(
@@ -2225,10 +2244,22 @@ public final class CompanionClientRuntime {
             int tagX = rankX + Math.max(13, textRenderer.getWidth(rankText) + 3);
             int tagMaxWidth = Math.max(8, valueX - tagX - 2);
             String clampedTag = textRenderer.trimToWidth(tagText, tagMaxWidth);
+            boolean selfEntry = isLocalPlayerEntry(entry.name());
+
+            if (selfEntry) {
+                drawContext.fill(
+                        contentLeft,
+                        rowY - 1,
+                        contentRight,
+                        rowY + panel.lineHeight() - 1,
+                        withAlpha(0x1E5AA8, 120));
+            }
 
             drawContext.drawTextWithShadow(textRenderer, rankText, rankX, rowY, rankColor);
-            drawContext.drawTextWithShadow(textRenderer, clampedTag, tagX, rowY, 0xFFCEE1FF);
-            drawContext.drawTextWithShadow(textRenderer, valueText, valueX, rowY, 0xFFD2E6FF);
+            drawContext.drawTextWithShadow(
+                    textRenderer, clampedTag, tagX, rowY, selfEntry ? 0xFFFFFFFF : 0xFFCEE1FF);
+            drawContext.drawTextWithShadow(
+                    textRenderer, valueText, valueX, rowY, selfEntry ? 0xFFE9F2FF : 0xFFD2E6FF);
             rowY += panel.lineHeight();
         }
     }
@@ -2242,7 +2273,7 @@ public final class CompanionClientRuntime {
         }
 
         if (CompanionConfig.HUD_WIDGET_COOLDOWNS_ID.equals(widgetId)) {
-            return 20;
+            return 22;
         }
 
         if (CompanionConfig.HUD_WIDGET_SATCHELS_ID.equals(widgetId)) {
@@ -2287,7 +2318,7 @@ public final class CompanionClientRuntime {
         }
 
         if (CompanionConfig.HUD_WIDGET_GANG_ID.equals(widgetId)) {
-            return 188;
+            return 156;
         }
 
         if (CompanionConfig.HUD_WIDGET_LEADERBOARD_CYCLE_ID.equals(widgetId)
@@ -2312,7 +2343,7 @@ public final class CompanionClientRuntime {
             return 62;
         }
         if (CompanionConfig.HUD_WIDGET_GANG_ID.equals(widgetId)) {
-            return 126;
+            return 112;
         }
         if ((CompanionConfig.HUD_WIDGET_LEADERBOARD_CYCLE_ID.equals(widgetId)
                         || HudWidgetCatalog.isLeaderboardWidget(widgetId))
@@ -2376,7 +2407,8 @@ public final class CompanionClientRuntime {
             }
 
             if (CompanionConfig.HUD_WIDGET_GANG_ID.equals(widgetId)) {
-                max = Math.max(max, textRenderer.getWidth(line) + 18);
+                int lineWidth = Math.min(128, textRenderer.getWidth(line));
+                max = Math.max(max, lineWidth + 16);
                 continue;
             }
 
@@ -2415,62 +2447,6 @@ public final class CompanionClientRuntime {
         }
 
         return max + (HUD_PANEL_HORIZONTAL_PADDING * 2);
-    }
-
-    private static void drawCircularMeter(
-            DrawContext drawContext,
-            int centerX,
-            int centerY,
-            int radius,
-            float progress,
-            int fillColor,
-            int trackColor) {
-        int segments = 72;
-        int filledSegments = Math.max(0, Math.min(segments, Math.round(progress * segments)));
-        int thickness = 2;
-
-        for (int segment = 0; segment < segments; segment++) {
-            double angle = (-Math.PI / 2.0D) + ((Math.PI * 2.0D * segment) / segments);
-            int color = segment < filledSegments ? fillColor : trackColor;
-            for (int ring = 0; ring < thickness; ring++) {
-                int ringRadius = Math.max(1, radius - ring);
-                int pixelX = centerX + (int) Math.round(Math.cos(angle) * ringRadius);
-                int pixelY = centerY + (int) Math.round(Math.sin(angle) * ringRadius);
-                drawContext.fill(pixelX, pixelY, pixelX + 1, pixelY + 1, color);
-            }
-        }
-
-        drawContext.fill(
-                centerX - (radius - 2),
-                centerY - (radius - 2),
-                centerX + (radius - 1),
-                centerY + (radius - 1),
-                withAlpha(0x121A2A, 210));
-    }
-
-    private static float progressForRemaining(OptionalLong remaining, long referenceMaxSeconds) {
-        if (remaining.isEmpty()) {
-            return 0.0F;
-        }
-
-        long remainingSeconds = Math.max(0L, remaining.orElse(0L));
-        if (remainingSeconds <= 0L) {
-            return 1.0F;
-        }
-
-        long maxSeconds = Math.max(1L, referenceMaxSeconds);
-        if (maxSeconds <= 1L) {
-            return 0.0F;
-        }
-
-        double denominator = Math.log1p(maxSeconds);
-        if (denominator <= 0.0D) {
-            return 0.0F;
-        }
-
-        float progress =
-                (float) (1.0D - (Math.log1p(Math.min(remainingSeconds, maxSeconds)) / denominator));
-        return clamp01(progress);
     }
 
     private static int statusColor(String statusText, OptionalLong remaining) {
@@ -2532,11 +2508,48 @@ public final class CompanionClientRuntime {
         return clamp01(1.0F - (remainingSeconds / (float) baseline));
     }
 
+    private float cooldownProgressForLine(
+            String progressKey, String rawValue, OptionalLong remaining) {
+        if (progressKey == null || progressKey.isBlank()) {
+            return 0.0F;
+        }
+
+        if (remaining.isEmpty()) {
+            cooldownProgressBaselineSeconds.remove(progressKey);
+            return 0.0F;
+        }
+
+        long remainingSeconds = Math.max(0L, remaining.orElse(0L));
+        if (remainingSeconds <= 0L) {
+            cooldownProgressBaselineSeconds.remove(progressKey);
+            return 1.0F;
+        }
+
+        long baseline = cooldownProgressBaselineSeconds.getOrDefault(progressKey, remainingSeconds);
+        if (remainingSeconds > baseline) {
+            baseline = remainingSeconds;
+        }
+        cooldownProgressBaselineSeconds.put(progressKey, baseline);
+
+        if (baseline <= 0L) {
+            return 0.0F;
+        }
+
+        return clamp01(1.0F - (remainingSeconds / (float) baseline));
+    }
+
     private static String normalizeEventProgressKey(String value) {
         if (value == null || value.isBlank()) {
             return "";
         }
         return value.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private static String normalizeCooldownProgressKey(String label) {
+        if (label == null || label.isBlank()) {
+            return "";
+        }
+        return compactCooldownLabel(label).trim().toLowerCase(java.util.Locale.ROOT);
     }
 
     private static int eventAccentColor(String eventKey, int defaultAccent) {
@@ -2573,6 +2586,9 @@ public final class CompanionClientRuntime {
 
     private static Item cooldownIcon(String label) {
         String normalized = normalizeStatusToken(label);
+        if (normalized.contains("ping")) {
+            return Items.BEACON;
+        }
         if (normalized.contains("rank kit") || normalized.contains("kit ")) {
             return Items.CHEST;
         }
@@ -2772,7 +2788,8 @@ public final class CompanionClientRuntime {
         return new LeaderboardEntry(rank, matcher.group(2).trim(), matcher.group(3).trim());
     }
 
-    private static OptionalDouble parseLeaderboardValue(String valueText) {
+    private static OptionalDouble parseLeaderboardValue(
+            String valueText, boolean allowBillionSuffix) {
         if (valueText == null || valueText.isBlank()) {
             return OptionalDouble.empty();
         }
@@ -2798,7 +2815,7 @@ public final class CompanionClientRuntime {
                     switch (suffix) {
                         case 'k' -> 1_000.0D;
                         case 'm' -> 1_000_000.0D;
-                        case 'b' -> 1_000_000_000.0D;
+                        case 'b' -> allowBillionSuffix ? 1_000_000_000.0D : 1.0D;
                         case 't' -> 1_000_000_000_000.0D;
                         default -> 1.0D;
                     };
@@ -2806,6 +2823,52 @@ public final class CompanionClientRuntime {
 
         double value = Math.max(0.0D, numeric * multiplier);
         return OptionalDouble.of(value);
+    }
+
+    private static boolean isBlocksLeaderboardPanel(HudWidgetPanel panel) {
+        if (panel == null) {
+            return false;
+        }
+        if (CompanionConfig.HUD_WIDGET_LEADERBOARD_BLOCKS_ID.equals(panel.widgetId())) {
+            return true;
+        }
+        if (!CompanionConfig.HUD_WIDGET_LEADERBOARD_CYCLE_ID.equals(panel.widgetId())) {
+            return false;
+        }
+        String titleKey = panel.titleTranslationKey();
+        return titleKey != null
+                && titleKey.contains(CompanionConfig.HUD_WIDGET_LEADERBOARD_BLOCKS_ID);
+    }
+
+    private static boolean isLocalPlayerEntry(String entryName) {
+        if (entryName == null || entryName.isBlank()) {
+            return false;
+        }
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null || client.player == null) {
+            return false;
+        }
+
+        String normalizedEntry = normalizeLeaderboardName(entryName);
+        if (normalizedEntry.isEmpty()) {
+            return false;
+        }
+
+        String normalizedProfileName =
+                normalizeLeaderboardName(client.player.getName().getString());
+        if (!normalizedProfileName.isEmpty() && normalizedEntry.equals(normalizedProfileName)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static String normalizeLeaderboardName(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        String withoutFormatting = value.replaceAll("(?i)§[0-9A-FK-OR]", "");
+        return withoutFormatting.replaceAll("[^A-Za-z0-9_]", "").toLowerCase(java.util.Locale.ROOT);
     }
 
     private static int leaderboardRankColor(int rank) {
@@ -2884,11 +2947,26 @@ public final class CompanionClientRuntime {
         }
         String trimmed = label.trim();
         String normalized = normalizeStatusToken(trimmed);
+        if (normalized.contains("ping")) {
+            return "Ping";
+        }
         if (normalized.startsWith("rank kit ")) {
             return "Kit " + trimmed.substring("Rank Kit ".length());
         }
         if (normalized.startsWith("cooldown ")) {
-            return trimmed.substring("Cooldown ".length()).trim();
+            trimmed = trimmed.substring("Cooldown ".length()).trim();
+            normalized = normalizeStatusToken(trimmed);
+        }
+        if (normalized.startsWith("perk ")) {
+            while (normalized.startsWith("perk ")) {
+                normalized = normalized.substring("perk ".length()).trim();
+            }
+            if (!normalized.isBlank()) {
+                String command = normalized.split("\\s+")[0];
+                if (!command.isBlank()) {
+                    return "/" + command.toLowerCase(java.util.Locale.ROOT);
+                }
+            }
         }
         return trimmed;
     }
@@ -3073,7 +3151,6 @@ public final class CompanionClientRuntime {
         }
 
         if (canSendPingIntent(client) && sendPingIntent(pingType)) {
-            sendClientMessage(client, pingSentMessage(pingType));
             return;
         }
 
@@ -3103,6 +3180,88 @@ public final class CompanionClientRuntime {
                 session.trucePingBeaconIdsSnapshot(),
                 ParticleTypes.FLAME,
                 ParticleTypes.SMALL_FLAME);
+    }
+
+    private synchronized void onWorldRenderEndMain(WorldRenderContext context) {
+        renderPingBeaconBeams(MinecraftClient.getInstance(), context);
+    }
+
+    private void renderPingBeaconBeams(MinecraftClient client, WorldRenderContext context) {
+        if (!shouldRenderPingBeacons(client)
+                || client.world == null
+                || context == null
+                || context.matrices() == null
+                || context.commandQueue() == null
+                || client.gameRenderer == null
+                || client.gameRenderer.getCamera() == null) {
+            return;
+        }
+
+        RenderTickCounter renderTickCounter = client.getRenderTickCounter();
+        float tickProgress =
+                renderTickCounter == null ? 0.0F : renderTickCounter.getTickProgress(false);
+        float beamRotationDegrees =
+                (float) Math.floorMod(client.world.getTime(), 40L) + tickProgress;
+        Vec3d cameraPos = client.gameRenderer.getCamera().getCameraPos();
+        IntSet gangEntityIds = session.gangPingBeaconIdsSnapshot();
+        IntSet truceEntityIds = session.trucePingBeaconIdsSnapshot();
+
+        renderPingBeaconBeams(
+                context,
+                client.world,
+                gangEntityIds,
+                cameraPos,
+                tickProgress,
+                beamRotationDegrees,
+                PING_BEAM_COLOR_GANG);
+        renderPingBeaconBeams(
+                context,
+                client.world,
+                truceEntityIds,
+                cameraPos,
+                tickProgress,
+                beamRotationDegrees,
+                PING_BEAM_COLOR_TRUCE);
+    }
+
+    private static void renderPingBeaconBeams(
+            WorldRenderContext context,
+            ClientWorld world,
+            IntSet entityIds,
+            Vec3d cameraPos,
+            float tickProgress,
+            float beamRotationDegrees,
+            int beamColor) {
+        var matrices = context.matrices();
+        var commandQueue = context.commandQueue();
+
+        for (int entityId : entityIds) {
+            Entity entity = world.getEntityById(entityId);
+
+            if (entity == null || entity.isRemoved()) {
+                continue;
+            }
+
+            Vec3d entityPos = entity.getLerpedPos(tickProgress);
+            double beamBaseY = entityPos.y + 0.1D;
+            matrices.push();
+            matrices.translate(
+                    entityPos.x - cameraPos.x - 0.5D,
+                    beamBaseY - cameraPos.y,
+                    entityPos.z - cameraPos.z - 0.5D);
+            BeaconBlockEntityRenderer.renderBeam(
+                    matrices,
+                    commandQueue,
+                    BeaconBlockEntityRenderer.BEAM_TEXTURE,
+                    1.0F,
+                    beamRotationDegrees,
+                    0,
+                    PING_BEAM_HEIGHT,
+                    beamColor,
+                    PING_BEAM_INNER_RADIUS,
+                    PING_BEAM_OUTER_RADIUS);
+            matrices.pop();
+        }
     }
 
     private static void renderPingBeaconParticles(
@@ -3330,14 +3489,6 @@ public final class CompanionClientRuntime {
         return keyBinding != null && keyBinding.isPressed();
     }
 
-    private static Text pingSentMessage(int pingType) {
-        if (pingType == ProtocolConstants.PING_TYPE_TRUCE) {
-            return Text.translatable("text.cosmicprisonsmod.pings.sent.truce");
-        }
-
-        return Text.translatable("text.cosmicprisonsmod.pings.sent.gang");
-    }
-
     private boolean shouldApplyPeacefulMiningPassThrough(MinecraftClient client) {
         if (client == null
                 || client.player == null
@@ -3472,16 +3623,52 @@ public final class CompanionClientRuntime {
         }
     }
 
+    private String resolveInstalledVersionForUpdateCheck() {
+        BuildAttestation attestation = buildAttestation;
+        if (attestation != null) {
+            String buildId = sanitizeVersionToken(attestation.buildId());
+            if (!buildId.isBlank()) {
+                return buildId;
+            }
+
+            String attestedModVersion = sanitizeVersionToken(attestation.modVersion());
+            if (!attestedModVersion.isBlank()) {
+                return attestedModVersion;
+            }
+        }
+
+        return resolveModVersion();
+    }
+
+    private static String sanitizeVersionToken(String rawVersion) {
+        if (rawVersion == null) {
+            return "";
+        }
+
+        String normalized = rawVersion.trim();
+        if (normalized.isEmpty()) {
+            return "";
+        }
+
+        if ("unknown".equalsIgnoreCase(normalized)
+                || "dev-local".equalsIgnoreCase(normalized)
+                || "UNSIGNED".equalsIgnoreCase(normalized)) {
+            return "";
+        }
+
+        return normalized;
+    }
+
     private static final class ModUpdateChecker {
-        private final String currentVersion;
+        private final Supplier<String> currentVersionSupplier;
         private final HttpClient httpClient;
         private final ExecutorService executor;
         private volatile long nextCheckAtMillis;
         private volatile boolean inFlight;
         private volatile UpdateNotice notice;
 
-        private ModUpdateChecker(String currentVersion) {
-            this.currentVersion = currentVersion;
+        private ModUpdateChecker(Supplier<String> currentVersionSupplier) {
+            this.currentVersionSupplier = currentVersionSupplier;
             this.httpClient =
                     HttpClient.newBuilder()
                             .connectTimeout(Duration.ofSeconds(4))
@@ -3494,7 +3681,7 @@ public final class CompanionClientRuntime {
                                 thread.setDaemon(true);
                                 return thread;
                             });
-            this.notice = UpdateNotice.notOutdated(currentVersion);
+            this.notice = UpdateNotice.notOutdated(currentVersionNow());
             this.nextCheckAtMillis = 0L;
             this.inFlight = false;
         }
@@ -3535,12 +3722,23 @@ public final class CompanionClientRuntime {
                     return;
                 }
 
+                String currentVersion = currentVersionNow();
                 notice = evaluateNotice(currentVersion, latestVersion);
             } catch (Exception ex) {
                 LOGGER.debug("Update check failed: {}", ex.getMessage());
             } finally {
                 inFlight = false;
             }
+        }
+
+        private String currentVersionNow() {
+            String resolved = sanitizeVersionToken(currentVersionSupplier.get());
+            if (!resolved.isBlank()) {
+                return resolved;
+            }
+
+            String fallback = sanitizeVersionToken(resolveModVersion());
+            return fallback.isBlank() ? "unknown" : fallback;
         }
 
         private static UpdateNotice evaluateNotice(String currentVersion, String latestVersion) {

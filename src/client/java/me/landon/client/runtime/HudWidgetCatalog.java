@@ -41,7 +41,10 @@ public final class HudWidgetCatalog {
                     ClientFeatures.HUD_COOLDOWNS_ID,
                     "text.cosmicprisonsmod.hud.cooldowns.title",
                     0x4EA7FF,
-                    List.of("Gang Join: 3m 14s", "Rank Kit Overlord: 1h 20m"));
+                    List.of(
+                            "Gang/Truce Ping: 15s",
+                            "Gang Join: 3m 14s",
+                            "Rank Kit Overlord: 1h 20m"));
     private static final WidgetDescriptor EVENTS =
             new WidgetDescriptor(
                     CompanionConfig.HUD_WIDGET_EVENTS_ID,
