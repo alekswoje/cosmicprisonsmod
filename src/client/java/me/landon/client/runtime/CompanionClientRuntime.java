@@ -2,6 +2,8 @@ package me.landon.client.runtime;
 
 import it.unimi.dsi.fastutil.ints.Int2LongMap;
 import it.unimi.dsi.fastutil.ints.Int2LongOpenHashMap;
+import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.ints.IntSet;
 import java.io.InputStream;
@@ -179,6 +181,10 @@ public final class CompanionClientRuntime {
     private final Int2LongMap trucePingVisualExpiryAtMillis = new Int2LongOpenHashMap();
     private final IntSet gangPingVisualSeededIds = new IntOpenHashSet();
     private final IntSet trucePingVisualSeededIds = new IntOpenHashSet();
+    private final Int2ObjectMap<PingLabelSnapshot> gangPingLabelSnapshots =
+            new Int2ObjectOpenHashMap<>();
+    private final Int2ObjectMap<PingLabelSnapshot> trucePingLabelSnapshots =
+            new Int2ObjectOpenHashMap<>();
     private KeyBinding gangPingKeyBinding;
     private KeyBinding trucePingKeyBinding;
 
@@ -195,6 +201,8 @@ public final class CompanionClientRuntime {
     private boolean gangPingKeyWasDown;
     private boolean trucePingKeyWasDown;
     private boolean initialized;
+
+    private record PingLabelSnapshot(Vec3d anchorPos, String entityName, float healthValue) {}
 
     /** Returns the global runtime instance used by all client integration points. */
     public static CompanionClientRuntime getInstance() {
@@ -3894,20 +3902,22 @@ public final class CompanionClientRuntime {
                         now);
         IntSet renderedEntityIds = new IntOpenHashSet(gangEntityIds.size() + truceEntityIds.size());
 
-        renderPingBeaconLabels(
+        renderPingBeaconLabelsForType(
                 drawContext,
                 client,
                 gangEntityIds,
+                gangPingLabelSnapshots,
                 renderedEntityIds,
                 tickProgress,
                 PING_LABEL_TEXT_COLOR_GANG,
                 PING_LABEL_DISTANCE_COLOR_GANG,
                 PING_LABEL_FRAME_COLOR_GANG,
                 PING_LABEL_BACKGROUND_COLOR_GANG);
-        renderPingBeaconLabels(
+        renderPingBeaconLabelsForType(
                 drawContext,
                 client,
                 truceEntityIds,
+                trucePingLabelSnapshots,
                 renderedEntityIds,
                 tickProgress,
                 PING_LABEL_TEXT_COLOR_TRUCE,
@@ -3916,10 +3926,11 @@ public final class CompanionClientRuntime {
                 PING_LABEL_BACKGROUND_COLOR_TRUCE);
     }
 
-    private static void renderPingBeaconLabels(
+    private static void renderPingBeaconLabelsForType(
             DrawContext drawContext,
             MinecraftClient client,
             IntSet entityIds,
+            Int2ObjectMap<PingLabelSnapshot> labelSnapshots,
             IntSet renderedEntityIds,
             float tickProgress,
             int textColor,
@@ -3939,6 +3950,7 @@ public final class CompanionClientRuntime {
                                 client.gameRenderer.getCamera().getPitch(),
                                 client.gameRenderer.getCamera().getYaw())
                         .normalize();
+        prunePingLabelSnapshots(labelSnapshots, entityIds);
 
         for (int entityId : entityIds) {
             if (entityId < 0 || renderedEntityIds.contains(entityId)) {
@@ -3946,16 +3958,31 @@ public final class CompanionClientRuntime {
             }
 
             Entity entity = world.getEntityById(entityId);
+            PingLabelSnapshot snapshot;
             if (entity == null || entity.isRemoved()) {
-                continue;
+                snapshot = labelSnapshots.get(entityId);
+                if (snapshot == null) {
+                    continue;
+                }
+            } else {
+                Vec3d entityPos = entity.getLerpedPos(tickProgress);
+                snapshot =
+                        new PingLabelSnapshot(
+                                new Vec3d(
+                                        entityPos.x,
+                                        entityPos.y
+                                                + entity.getHeight()
+                                                + PING_LABEL_VERTICAL_OFFSET,
+                                        entityPos.z),
+                                entity.getName().getString(),
+                                resolveEntityHealth(entity));
+                labelSnapshots.put(entityId, snapshot);
             }
 
-            Vec3d entityPos = entity.getLerpedPos(tickProgress);
-            Vec3d labelAnchor =
-                    new Vec3d(
-                            entityPos.x,
-                            entityPos.y + entity.getHeight() + PING_LABEL_VERTICAL_OFFSET,
-                            entityPos.z);
+            Vec3d labelAnchor = snapshot.anchorPos();
+            if (labelAnchor == null || !labelAnchor.isFinite()) {
+                continue;
+            }
             if (labelAnchor.subtract(cameraPos).dotProduct(cameraLookDirection) <= 0.0D) {
                 continue;
             }
@@ -3978,8 +4005,9 @@ public final class CompanionClientRuntime {
                     client.textRenderer,
                     centerX,
                     anchorY,
-                    entity,
-                    Math.sqrt(client.player.squaredDistanceTo(entityPos)),
+                    snapshot.entityName(),
+                    snapshot.healthValue(),
+                    Math.sqrt(client.player.squaredDistanceTo(labelAnchor)),
                     textColor,
                     distanceColor,
                     frameColor,
@@ -3993,13 +4021,14 @@ public final class CompanionClientRuntime {
             TextRenderer textRenderer,
             int centerX,
             int anchorY,
-            Entity entity,
+            String entityName,
+            float healthValue,
             double distance,
             int textColor,
             int distanceColor,
             int frameColor,
             int backgroundColor) {
-        String lineOne = entity.getName().getString() + "  " + formatPingHealth(entity) + " HP";
+        String lineOne = entityName + "  " + formatPingHealth(healthValue) + " HP";
         String lineTwo = Math.max(0, (int) Math.round(distance)) + " blocks away";
         int lineOneWidth = textRenderer.getWidth(lineOne);
         int lineTwoWidth = textRenderer.getWidth(lineTwo);
@@ -4021,23 +4050,40 @@ public final class CompanionClientRuntime {
         drawContext.drawTextWithShadow(textRenderer, lineTwo, lineTwoX, lineTwoY, distanceColor);
     }
 
-    private static String formatPingHealth(Entity entity) {
-        if (!(entity instanceof LivingEntity livingEntity)) {
+    private static String formatPingHealth(float healthValue) {
+        if (!Float.isFinite(healthValue)) {
             return "?";
         }
-
-        float totalHealth = livingEntity.getHealth() + livingEntity.getAbsorptionAmount();
-        if (totalHealth <= 0.0F) {
+        if (healthValue <= 0.0F) {
             return "0";
         }
 
-        float roundedToTenth = Math.round(totalHealth * 10.0F) / 10.0F;
+        float roundedToTenth = Math.round(healthValue * 10.0F) / 10.0F;
         float roundedToWhole = Math.round(roundedToTenth);
         if (Math.abs(roundedToTenth - roundedToWhole) < 0.05F) {
             return Integer.toString((int) roundedToWhole);
         }
 
         return String.format(java.util.Locale.ROOT, "%.1f", roundedToTenth);
+    }
+
+    private static float resolveEntityHealth(Entity entity) {
+        if (!(entity instanceof LivingEntity livingEntity)) {
+            return Float.NaN;
+        }
+
+        return livingEntity.getHealth() + livingEntity.getAbsorptionAmount();
+    }
+
+    private static void prunePingLabelSnapshots(
+            Int2ObjectMap<PingLabelSnapshot> labelSnapshots, IntSet activeEntityIds) {
+        var iterator = labelSnapshots.keySet().iterator();
+        while (iterator.hasNext()) {
+            int entityId = iterator.nextInt();
+            if (!activeEntityIds.contains(entityId)) {
+                iterator.remove();
+            }
+        }
     }
 
     private IntSet resolveActivePingVisualIds(
@@ -4324,6 +4370,8 @@ public final class CompanionClientRuntime {
         trucePingVisualExpiryAtMillis.clear();
         gangPingVisualSeededIds.clear();
         trucePingVisualSeededIds.clear();
+        gangPingLabelSnapshots.clear();
+        trucePingLabelSnapshots.clear();
     }
 
     private boolean shouldApplyPeacefulMiningPassThrough(MinecraftClient client) {
